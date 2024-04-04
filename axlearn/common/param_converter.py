@@ -379,7 +379,7 @@ def axlearn_to_torch(layer: BaseLayer, src: NestedTensor, dst: torch.nn.Module):
         type_emb_layer = getattr(layer, "type_emb", None)
         type_emb_params = src.get("type_emb", None)
         if type_emb_layer is None or type_emb_params is None:
-            if type_emb_layer is None != type_emb_params is None:
+            if (type_emb_layer is None) != (type_emb_params is None):
                 raise ValueError(
                     "Input layer and params must either both have type embeddings, or both not."
                 )
@@ -943,6 +943,8 @@ def _parameters_from_deberta_self_attention(
     params["dropout"] = {}
     params["pos_emb"] = {}
     params["pos_emb_dropout"] = {}
+    params["scale_key"] = {}
+    params["scale_query"] = {}
     if "pos_k_proj" not in params:
         params["pos_k_proj"] = {}
     if "pos_q_proj" not in params:

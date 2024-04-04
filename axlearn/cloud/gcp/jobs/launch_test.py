@@ -14,6 +14,7 @@ from axlearn.cloud.common.bastion import JobState as BastionJobState
 from axlearn.cloud.common.bastion import deserialize_jobspec, new_jobspec
 from axlearn.cloud.common.job import Job
 from axlearn.cloud.common.scheduler import JobMetadata
+from axlearn.cloud.gcp import bundler
 from axlearn.cloud.gcp.jobs import bastion_vm, launch, tpu_runner
 from axlearn.cloud.gcp.jobs.launch import (
     BaseBastionManagedJob,
@@ -21,8 +22,8 @@ from axlearn.cloud.gcp.jobs.launch import (
     BastionManagedTPUJob,
     Launcher,
     _get_launcher_or_exit,
-    _match_by_regex,
 )
+from axlearn.cloud.gcp.jobs.launch_utils import jobs_table, usage_table
 from axlearn.cloud.gcp.test_utils import mock_gcp_settings
 from axlearn.common.config import config_for_function
 from axlearn.common.test_utils import TestWithTemporaryCWD
@@ -30,32 +31,6 @@ from axlearn.common.test_utils import TestWithTemporaryCWD
 
 class TestUtils(parameterized.TestCase):
     """Tests util functions."""
-
-    @parameterized.parameters(
-        # Matches any "start" command.
-        dict(
-            matcher=_match_by_regex(match_regex=dict(start=".*")),
-            cases=[
-                dict(action="start", instance_type="", expected=True),
-                dict(action="start", instance_type="test type", expected=True),
-                # Missing matcher for list.
-                dict(action="list", instance_type="", expected=False),
-            ],
-        ),
-        # Matches TPU types.
-        dict(
-            matcher=_match_by_regex(match_regex=dict(start=r"v(\d)+.*-(\d)+", list="tpu")),
-            cases=[
-                dict(action="start", instance_type="v4-8", expected=True),
-                dict(action="start", instance_type="v5litepod-16", expected=True),
-                dict(action="start", instance_type="tpu", expected=False),
-                dict(action="list", instance_type="tpu", expected=True),
-            ],
-        ),
-    )
-    def test_match_by_regex(self, matcher, cases):
-        for case in cases:
-            self.assertEqual(case["expected"], matcher(case["action"], case["instance_type"]))
 
     def test_get_launcher_or_exit(self):
         def match_tpu(action, instance_type):
@@ -81,6 +56,10 @@ class TestBaseBastionManagedJob(parameterized.TestCase):
     """Tests BaseBastionManagedJob."""
 
     def _mock_config(self, **kwargs):
+        class DummyRunner(Job):
+            def _execute(self):
+                pass
+
         cfg = BaseBastionManagedJob.default_config().set(
             instance_type="test",
             user_id="test_user",
@@ -93,6 +72,11 @@ class TestBaseBastionManagedJob(parameterized.TestCase):
             bastion_name="test_bastion",
             priority=3,
             output_dir="test-output",
+            runner=DummyRunner.default_config().set(
+                max_tries=1,
+                retry_interval=60,
+                command="",
+            ),
         )
         cfg.set(**kwargs)
         test_fixture = self
@@ -108,11 +92,15 @@ class TestBaseBastionManagedJob(parameterized.TestCase):
                     test_fixture.assertEqual(spec.metadata.project_id, cfg.project_id or "none")
                     test_fixture.assertEqual(spec.metadata.priority, cfg.priority)
 
-        return cfg.set(bastion_dir=FakeBastionDirectory.default_config())
+        return cfg.set(bastion_dir=FakeBastionDirectory.default_config().set(root_dir="temp_dir"))
 
     @parameterized.parameters(
         dict(output_dir="", instance_type="test", expected=ValueError("output_dir")),
-        dict(output_dir="test-output", instance_type="", expected=ValueError("instance_type")),
+        dict(
+            output_dir="test-output",
+            instance_type="",
+            expected=ValueError("instance_type"),
+        ),
     )
     def test_empty(self, expected, **kwargs):
         # Ensure that output_dir is provided.
@@ -124,17 +112,16 @@ class TestBaseBastionManagedJob(parameterized.TestCase):
         mock_get_vm_node = mock.patch(
             f"{launch.__name__}._get_bastion_vm", return_value=dict(status="RUNNING")
         )
-        mock_bastion_root_dir = mock.patch(
-            f"{launch.__name__}.bastion_root_dir", return_value="temp_dir"
-        )
-        with mock_get_vm_node, mock_bastion_root_dir:
+        with mock_get_vm_node:
             # Test with defaults.
             job = self._mock_config().instantiate()
             job._execute()
 
             # Test with bundler.
             mock_bundler = mock.MagicMock()
-            job = self._mock_config(bundler=config_for_function(lambda: mock_bundler)).instantiate()
+            cfg = self._mock_config()
+            cfg.runner.bundler = config_for_function(lambda: mock_bundler)
+            job = cfg.instantiate()
             job._execute()
             self.assertTrue(mock_bundler.bundle.called)
 
@@ -208,18 +195,12 @@ class TestBaseBastionManagedJob(parameterized.TestCase):
                 cleanup_proc=None,
             ),
         }
-        mock_bastion_root_dir = mock.patch(
-            f"{launch.__name__}.bastion_root_dir", return_value="temp_dir"
-        )
-        mock_download_job_batch = mock.patch(
-            f"{launch.__name__}.download_job_batch", return_value=(mock_jobs, set())
-        )
-        with mock_download_job_batch, mock_bastion_root_dir:
-            job = self._mock_config().instantiate()
+        job = self._mock_config().instantiate()
+        with mock.patch.object(job._bastion_dir, "list_jobs", return_value=mock_jobs):
             out = job._list()
             self.assertEqual(out["jobs"], mock_jobs)
             self.assertEqual(
-                job._jobs_table(out["jobs"]),
+                jobs_table(out["jobs"]),
                 dict(
                     headings=[
                         "NAME",
@@ -258,7 +239,7 @@ class TestBaseBastionManagedJob(parameterized.TestCase):
                 ),
             )
             self.assertEqual(
-                job._usage_table(out["usage_by_project"]),
+                usage_table(out["usage_by_project"]),
                 dict(
                     headings=["PRINCIPAL", "RESOURCE", "USAGE", "COUNT"],
                     rows=[
@@ -270,7 +251,7 @@ class TestBaseBastionManagedJob(parameterized.TestCase):
                 ),
             )
             self.assertEqual(
-                job._usage_table(out["usage_by_user"]),
+                usage_table(out["usage_by_user"]),
                 dict(
                     headings=["PRINCIPAL", "RESOURCE", "USAGE", "COUNT"],
                     rows=[
@@ -289,8 +270,10 @@ class TestBastionManagedTPUJob(TestWithTemporaryCWD):
         output_dir=[None, "test-output"],
         zone=[None, "test-zone"],
         action=["start", "list"],
+        bastion=[None, "test-bastion"],
+        bundler_type=[None, "artifactregistry"],
     )
-    def test_flags(self, name, output_dir, zone, action):
+    def test_flags(self, name, output_dir, zone, action, bastion, bundler_type):
         # Construct flags.
         fv = flags.FlagValues()
         flags.DEFINE_string("instance_type", "test-type", help="test", flag_values=fv)
@@ -303,10 +286,13 @@ class TestBastionManagedTPUJob(TestWithTemporaryCWD):
         mock_settings = {
             "ttl_bucket": "ttl_bucket",
             "permanent_bucket": "permanent_bucket",
-            "zone": "default-zone",
+            "zone": zone or "default-zone",
+            "docker_repo": "test-repo",
+            "default_dockerfile": "test-dockerfile",
         }
         patch_settings = mock_gcp_settings(
-            [launch.__name__, bastion_vm.__name__, tpu_runner.__name__], settings=mock_settings
+            [launch.__name__, bastion_vm.__name__, tpu_runner.__name__, bundler.__name__],
+            settings=mock_settings,
         )
 
         with patch_fns, patch_settings:
@@ -320,33 +306,43 @@ class TestBastionManagedTPUJob(TestWithTemporaryCWD):
                 argv.append(f"--output_dir={output_dir}")
             if zone is not None:
                 argv.append(f"--zone={zone}")
+            if bastion is not None:
+                argv.append(f"--bastion={bastion}")
+            if bundler_type is not None:
+                argv.append(f"--bundler_type={bundler_type}")
+                argv.append("--bundler_spec=image=test")
             fv(argv)
 
             # Check some basic flags.
-            self.assertEqual(fv.bastion, None)
+            self.assertEqual(fv.bastion, bastion)
             self.assertEqual(fv.name, name or "job-name")
-            self.assertEqual(fv.zone, zone or "default-zone")
+            self.assertEqual(fv.zone, zone)
             self.assertIn("tpu_type", fv)
             self.assertIn("bundler_type", fv)
             self.assertIsNotNone(fv["name"].default)
-            self.assertIsNotNone(fv["bundler_type"].default)
             self.assertEqual(fv["tpu_type"].default, "test-type")
             self.assertEqual(fv.output_dir, output_dir)
 
             cfg = BastionManagedTPUJob.from_flags(fv, command="test command", action=action)
 
+            self.assertIsNone(cfg.bundler)
             if action == "start":
-                self.assertIn("tpu", cfg.bundler.extras)
+                self.assertIsNotNone(cfg.runner)
+                self.assertIsNotNone(cfg.runner.bundler)
+                self.assertIn("tpu", cfg.runner.bundler.extras)
             else:
-                self.assertIsNone(cfg.bundler)
+                self.assertIsNone(cfg.runner)
 
             # Check bastion flag. If None, we should infer from zone in mock_settings.
-            if zone is None:
+            if bastion:
+                self.assertEqual(bastion, cfg.bastion_name)
+            elif zone is None:
                 self.assertEqual(
-                    cfg.bastion_name, f"{mock_settings['zone']}-{bastion_vm._SHARED_BASTION_SUFFIX}"
+                    f"{mock_settings['zone']}-{bastion_vm._SHARED_BASTION_SUFFIX}",
+                    cfg.bastion_name,
                 )
             else:
-                self.assertEqual(cfg.bastion_name, f"{zone}-{bastion_vm._SHARED_BASTION_SUFFIX}")
+                self.assertEqual(f"{zone}-{bastion_vm._SHARED_BASTION_SUFFIX}", cfg.bastion_name)
 
             # Check output_dir.
             if output_dir is None:
@@ -354,7 +350,17 @@ class TestBastionManagedTPUJob(TestWithTemporaryCWD):
             else:
                 self.assertEqual(cfg.output_dir, output_dir)
 
-        # Make sure command is expected.
-        for flag in ["name", "bundler_type", "tpu_type"]:
-            self.assertIn(f"--{flag}={fv[flag].value}", cfg.command)
-        self.assertIn("test command", cfg.command)
+        if action == "start":
+            # Make sure command is expected.
+            for flag in ["name", "bundler_type", "tpu_type"]:
+                if fv[flag].value is not None:
+                    self.assertIn(f"--{flag}={fv[flag].value}", cfg.command)
+            self.assertIn("test command", cfg.command)
+        else:
+            self.assertIsNone(cfg.command)
+
+        # Should be instantiable.
+        job: BastionManagedTPUJob = cfg.instantiate()
+        # Bundler should be propagated to runner.
+        if action == "start":
+            self.assertIsNotNone(job.runner.bundler)
