@@ -21,10 +21,11 @@ import chex
 import jax
 import jax.numpy as jnp
 import pytest
+from jax.experimental.pallas.ops.attention import mha as pallas_mha
 
 from axlearn.common.flash_attention.gpu_attention import flash_attention
 from axlearn.common.flash_attention.utils import mha_reference
-from jax.experimental.pallas.ops.attention import mha as pallas_mha
+
 
 @pytest.mark.parametrize(
     "batch_size,seq_len,num_heads,per_head_dim",
@@ -59,6 +60,7 @@ def test_fwd_against_ref(
         bias = None
 
     if use_pallas:
+
         @jax.jit
         def impl(q, k, v, bias):
             fn = functools.partial(
@@ -72,6 +74,7 @@ def test_fwd_against_ref(
             return out
 
     else:
+
         @jax.jit
         def impl(q, k, v, bias):
             fn = functools.partial(
@@ -133,10 +136,11 @@ def test_bwd_against_ref(
     if use_pallas:
         jax_out = pallas_mha(q, k, v, None, causal=causal, sm_scale=sm_scale)
     else:
-       jax_out = flash_attention(q, k, v, bias, causal=causal, softmax_scale=sm_scale)
+        jax_out = flash_attention(q, k, v, bias, causal=causal, softmax_scale=sm_scale)
     jax_ref_out = mha_reference(q, k, v, bias, causal=causal, softmax_scale=sm_scale)
     chex.assert_trees_all_close(jax_out, jax_ref_out, atol=0.005)
     if use_pallas:
+
         def fn(q, k, v, bias):
             # return flash_attention(
             return pallas_mha(
@@ -149,7 +153,9 @@ def test_bwd_against_ref(
                 block_q=block_size,
                 block_k=block_size,
             ).sum()
+
     else:
+
         def fn(q, k, v, bias):
             return flash_attention(
                 q,

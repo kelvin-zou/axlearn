@@ -33,17 +33,17 @@ from typing import Any, Optional, Sequence
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 # pytype: disable=import-error  # pylint: disable=import-error
 # import jax_triton as jt
 from jax import lax
 from jax.experimental import pallas as pl
-import numpy as np
 
 # pytype: enable=import-error  # pylint: enable=import-error
 
 Tensor = jax.Array
-DEFAULT_MASK_VALUE= -1.0e6
+DEFAULT_MASK_VALUE = -1.0e6
 
 
 def _mha_forward_kernel(
@@ -103,6 +103,7 @@ def _mha_forward_kernel(
     # TODO: fix the segment mask for the case where seq length is not the whole
     # context.
     qk_scale = 1.44269504  # 1/log(2)
+
     # In FlashAttention algorithm 1 there are 2 loops: slow over tiles of kv (size
     # Bc == block_k here), and fast over blocks of q (size Br == block_q here).
     # Here we only loop over blocks of kv to process entire seq_len, the loop over
@@ -113,10 +114,13 @@ def _mha_forward_kernel(
         curr_k_slice = pl.dslice(start_k * block_k, block_k)
         k = pl.load(k_ref, (curr_k_slice, pl.dslice(None)))
         qk = pl.dot(q, k.T)  # [block_q, block_k].
-        if softmax_scale != 1.:
+        if softmax_scale != 1.0:
             qk *= softmax_scale
         if bias_type == "matrix":
-            b = pl.load(b_ref,(curr_q_slice, curr_k_slice),)
+            b = pl.load(
+                b_ref,
+                (curr_q_slice, curr_k_slice),
+            )
             qk += b
         # TODO: fix the segment mask for the case where seg length is not seq_len.
         if causal:
@@ -133,11 +137,11 @@ def _mha_forward_kernel(
         m_next = jnp.maximum(m_curr, m_prev)
         correction = jnp.exp2(m_prev - m_next)
         l_prev_corr = l_prev * correction
-        p =  jnp.exp2(qk - m_next[:, None])
+        p = jnp.exp2(qk - m_next[:, None])
         l_next = jnp.sum(p, axis=1) + l_prev_corr
         l_rcp = 1.0 / l_next
         p = p * l_rcp[:, None]
-        acc_prev = (l_prev_corr * l_rcp)[:, None] *  acc
+        acc_prev = (l_prev_corr * l_rcp)[:, None] * acc
 
         v = pl.load(v_ref, (curr_k_slice, pl.dslice(block_d)))
         acc_curr = pl.dot(p.astype(v.dtype), v)
@@ -239,11 +243,11 @@ def flash_attention(
         block_d=head_dim,
     )
     in_specs = [
-            pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # query
-            pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # key
-            pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # value
-            bias_block_spec,  # bias
-        ]
+        pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # query
+        pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # key
+        pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # value
+        bias_block_spec,  # bias
+    ]
     out_shape = jax.ShapeDtypeStruct(shape=query.shape, dtype=query.dtype)
     out_specs = pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim))
 
@@ -321,11 +325,11 @@ def _mha_forward(
         pl.BlockSpec(lambda _, j, k: (j, k, 0), (None, None, seq_len)),
     ]
     in_specs = [
-            pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # query
-            pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # key
-            pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # value
-            bias_block_spec,  # bias
-        ]
+        pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # query
+        pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # key
+        pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # value
+        bias_block_spec,  # bias
+    ]
 
     out, l, m = pl.pallas_call(
         kernel,
@@ -461,6 +465,7 @@ def _mha_backward_kernel(
     seq_len = q_ref.shape[0]
     # pid = pl.program_id(0)
     qk_scale = 1.44269504
+
     def outer_loop(start_k, _):
         dv = jnp.zeros([block_k, block_d], dtype=jnp.float32)
         dk = jnp.zeros([block_k, block_d], dtype=jnp.float32)
@@ -483,10 +488,13 @@ def _mha_backward_kernel(
                 qk *= softmax_scale
             if bias_type == "matrix":
                 # Load bias in transposed order, for hopefully better cache efficiency.
-                b = pl.load(b_ref, (slice_k, slice_q),)
+                b = pl.load(
+                    b_ref,
+                    (slice_k, slice_q),
+                )
                 b = b.astype(jnp.float32)
                 qk += b.T  # Transpose back.
-                
+
             if causal:
                 span_q = start_q * block_q + jnp.arange(block_q)
                 causal_mask = span_q[:, None] >= span_k[None, :]
@@ -503,22 +511,20 @@ def _mha_backward_kernel(
             if softmax_scale != 1.0:
                 ds = ds * softmax_scale
             dk = dk + pl.dot(ds.astype(q_ref.dtype).T, q)
-            dq = pl.load(dq_ref, (slice_q, slice(None)),
+            dq = pl.load(
+                dq_ref,
+                (slice_q, slice(None)),
                 eviction_policy="evict_last",
             )
             dq = dq + pl.dot(ds.astype(k.dtype), k).astype(dq.dtype)
-            pl.store(dq_ref, (slice_q,
-                              slice(None)), dq, eviction_policy="evict_last")
+            pl.store(dq_ref, (slice_q, slice(None)), dq, eviction_policy="evict_last")
             return dv, dk
 
         if causal:
             lower_bound = lax.div(start_k * block_k, block_q)
         else:
             lower_bound = 0
-        dv, dk = lax.fori_loop(lower_bound,
-                               pl.cdiv(seq_len, block_q),
-                               inner_loop,
-                               (dv, dk))
+        dv, dk = lax.fori_loop(lower_bound, pl.cdiv(seq_len, block_q), inner_loop, (dv, dk))
         pl.store(dv_ref, (slice_k, slice(None)), dv.astype(dv_ref.dtype))
         pl.store(dk_ref, (slice_k, slice(None)), dk.astype(dk_ref.dtype))
 
@@ -574,17 +580,17 @@ def _mha_backward(
             input_output_aliases = {9: 0}
 
         in_specs = [
-                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # query
-                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # key
-                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # value
-                bias_block_spec,  # bias
-                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
-                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
-                pl.BlockSpec(lambda j, k: (j, k, 0), (None, None, seq_len)),
-                pl.BlockSpec(lambda j, k: (j, k, 0), (None, None, seq_len)),
-                pl.BlockSpec(lambda j, k: (j, k, 0), (None, None, seq_len)),
-                pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
-            ]
+            pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # query
+            pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # key
+            pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),  # value
+            bias_block_spec,  # bias
+            pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+            pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+            pl.BlockSpec(lambda j, k: (j, k, 0), (None, None, seq_len)),
+            pl.BlockSpec(lambda j, k: (j, k, 0), (None, None, seq_len)),
+            pl.BlockSpec(lambda j, k: (j, k, 0), (None, None, seq_len)),
+            pl.BlockSpec(lambda j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+        ]
         grid = (batch_size, num_heads)
         # TODO(markblee): num_warps=8 seems to work from basic testing, confirm the below comment.
         # TODO(sharadmv): figure out why num_warps=8 doesn't work!
@@ -617,5 +623,6 @@ def _mha_backward(
     else:
         raise ValueError(f"Invalid backward pass implementation: {backward_pass_impl}")
     return dq.astype(q.dtype), dk, dv, None
+
 
 flash_attention.defvjp(_mha_forward, _mha_backward)

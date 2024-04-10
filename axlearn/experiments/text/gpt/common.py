@@ -30,17 +30,16 @@ from axlearn.common import (
 )
 from axlearn.common.attention import (
     AttentionLogitBiasLayer,
+    BaseQKVLinear,
     CausalAttentionLogitBiasLayer,
     FusedQKVLinear,
     GroupedQueryAttention,
-    BaseQKVLinear,
     RepeatedTransformerLayer,
-    TransformerLayer,
     TransformerAttentionLayer,
+    TransformerLayer,
     build_remat_spec,
     set_double_shard_weights_config,
 )
-
 from axlearn.common.checkpointer import every_n_steps_policy
 from axlearn.common.config import (
     FunctionConfigBase,
@@ -103,7 +102,6 @@ class FlashAttention(AxlearnFlashAttention):
             },
         )
         return cfg
-
 
 
 def tfds_input(

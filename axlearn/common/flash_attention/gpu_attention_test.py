@@ -21,10 +21,10 @@ import chex
 import jax
 import jax.numpy as jnp
 import pytest
+from jax.experimental.pallas.ops.attention import mha as pallas_mha
 
 from axlearn.common.flash_attention.gpu_attention import flash_attention
 from axlearn.common.flash_attention.utils import mha_reference
-from jax.experimental.pallas.ops.attention import mha as pallas_mha
 
 
 @pytest.mark.parametrize(
@@ -42,7 +42,7 @@ from jax.experimental.pallas.ops.attention import mha as pallas_mha
 @pytest.mark.parametrize("use_fwd", [True, False])
 @pytest.mark.parametrize("causal", [True, False])
 @pytest.mark.parametrize("sm_scale", [1.0, 0.123])
-@pytest.mark.parametrize("bias_type", ["none","matrix"])
+@pytest.mark.parametrize("bias_type", ["none", "matrix"])
 def test_fwd_against_ref(
     batch_size: int,
     seq_len: int,
@@ -65,6 +65,7 @@ def test_fwd_against_ref(
         bias = None
 
     if use_fwd:
+
         @jax.jit
         def impl(q, k, v, bias):
             fn = functools.partial(
@@ -102,7 +103,7 @@ def test_fwd_against_ref(
         (2, 8, 384, 64),
     ],
 )
-@pytest.mark.parametrize("bias_type", ["none","matrix"])
+@pytest.mark.parametrize("bias_type", ["none", "matrix"])
 @pytest.mark.parametrize("block_size", [128, 64])
 @pytest.mark.parametrize("causal", [True, False])
 def test_bwd_against_ref(
@@ -158,8 +159,8 @@ def test_bwd_against_ref(
     jax_grads = jax.grad(fn, argnums=(0, 1, 2))(q, k, v, bias)
     jax_ref_grads = jax.grad(ref_fn, argnums=(0, 1, 2))(q, k, v, bias)
     chex.assert_trees_all_close(jax_grads, jax_ref_grads, atol=0.05)
-    
-    
+
+
 @pytest.mark.parametrize(
     "batch_size,num_heads,seq_len,per_head_dim",
     [
@@ -186,7 +187,6 @@ def validate_triton_with_pallas(
         jax.random.PRNGKey(2), (batch_size, seq_len, num_heads, per_head_dim), dtype=jnp.float16
     )
 
-
     assert str(q.device()) == "cuda:0"
     sm_scale = q.shape[-1] ** -0.5
 
@@ -194,6 +194,7 @@ def validate_triton_with_pallas(
     jax_out = pallas_mha(q, k, v, segment_ids=None, causal=causal, sm_scale=sm_scale)
     jax_ref_out = mha_reference(q, k, v, causal=causal, softmax_scale=sm_scale)
     chex.assert_trees_all_close(jax_out, jax_ref_out, atol=0.005)
+
     def fn(q, k, v):
         return pallas_mha(
             q,
