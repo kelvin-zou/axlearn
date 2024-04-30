@@ -100,6 +100,9 @@ def named_trainer_configs() -> Dict[str, TrainerConfigFn]:
             preprocessor=config_for_function(lm_text_preprocessor).set(max_padding_fraction=0.5),
         )
         for model_size in fuji.MODEL_SIZES:
+            # Skip the 70B model with V1 version due to no GQA.
+            if model_size == "70B" and version == fuji.Version.V1:
+                continue
             config_name = make_config_name(
                 arch=arch, model_size=model_size, version=f"v{version.value}"
             )

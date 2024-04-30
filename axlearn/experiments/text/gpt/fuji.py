@@ -126,6 +126,31 @@ def get_trainer_kwargs(model_size: str, *, vocab_size: int, version: Version) ->
                 ),
             ),
         )
+    elif model_size == "70B":
+        trainer_kwargs = dict(
+            model_kwargs=dict(
+                num_layers=80,
+                hidden_dim=128 * 64,
+                num_heads=64,
+                num_kv_heads=8,
+                rope_theta=rope_theta,
+            ),
+            learner_kwargs=dict(peak_lr=3e-4, weight_decay=0.1),
+            max_sequence_length=max_sequence_length,
+            train_batch_size=train_batch_size,
+            max_step=max_step,
+            mesh_shape=mesh_shape_from_axes(fsdp=-1),
+            mesh_rules=(
+                # tpu-v5e. step time: TBD.
+                ("tpu-v5litepod-256", mesh_shape_from_axes(data=-1, fsdp=256)),
+                # H100/A100 80G. Maximum per-node batch size = 16, hence need >= 64 nodes.
+                # p5.48xlarge 8x64.
+                (
+                    "gpu-(p5.48xlarge|p4de.24xlarge)-(512|1024)",
+                    mesh_shape_from_axes(data=-1, fsdp=32),
+                ),
+            ),
+        )
     else:
         raise NotImplementedError(f"Unknown model size {model_size}.")
     model_kwargs = trainer_kwargs.pop("model_kwargs")
