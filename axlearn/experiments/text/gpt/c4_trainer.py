@@ -140,9 +140,9 @@ def named_trainer_configs() -> Dict[str, TrainerConfigFn]:
                     # pytype: enable=annotation-type-mismatch
 
                     # The original config was supposed to run on 64 machines.
-                    cfg.input.batcher.global_batch_size //= 64
+                    cfg.input.batcher.global_batch_size //= 32
                     for evaler in cfg.evalers.values():
-                        evaler.input.batcher.global_batch_size //= 64
+                        evaler.input.batcher.global_batch_size //= 32
                     return cfg
 
                 config_map[f"{config_name}-single-host"] = functools.partial(
