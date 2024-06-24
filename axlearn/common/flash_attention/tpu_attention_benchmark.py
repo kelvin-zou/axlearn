@@ -125,8 +125,17 @@ def _benchmark(
     )
     flash_bwd_time = _time_call(lambda: flash_grad_fn(q, k, v, bias)[0])
 
-    print(f"ref_fwd:{ref_fwd_time:.4f}s, flash_fwd:{flash_fwd_time:.4f}s")
-    print(f"ref_bwd:{ref_bwd_time:.4f}s, flash_bwd:{flash_bwd_time:.4f}s\n")
+    splash_impl = flash_attention_implementation(
+        "tpu", causal=causal, softmax_scale=softmax_scale, block_size=block_size, sparse_attention=True
+    )
+    splash_fwd_time = _time_call(lambda: splash_impl(q, k, v, bias))
+    splash_grad_fn = jax.jit(
+        jax.grad(lambda q, k, v, b: splash_impl(q, k, v, b).mean(), argnums=(0, 1, 2))
+    )
+    splash_bwd_time = _time_call(lambda: splash_grad_fn(q, k, v, bias)[0])
+
+    print(f"ref_fwd:{ref_fwd_time:.4f}s, flash_fwd:{flash_fwd_time:.4f}s, splash:_fwd{splash_fwd_time:.4f}s")
+    print(f"ref_bwd:{ref_bwd_time:.4f}s, flash_bwd:{flash_bwd_time:.4f}s, splash:_bwd{splash_bwd_time:.4f}s\n")
 
 
 if __name__ == "__main__":
@@ -136,7 +145,7 @@ if __name__ == "__main__":
         print(f"Benchmarking attention representative of {name} model layer on {device_kind}.")
         _benchmark(
             batch_size=2,
-            seq_len=2048,
+            seq_len=4096,
             block_size=4 * 128,
             **cfg,
         )

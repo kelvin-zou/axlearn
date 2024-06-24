@@ -11,6 +11,7 @@ from jax.experimental.pallas.ops.tpu.flash_attention import BlockSizes
 
 from axlearn.common.attention import NEG_INF
 from axlearn.common.flash_attention.tpu_attention import flash_attention as tpu_flash_attention
+from axlearn.common.flash_attention.tpu_attention import splash_attention as tpu_splash_attention
 from axlearn.common.utils import Tensor
 
 
@@ -81,6 +82,7 @@ def flash_attention_implementation(
     causal: bool,
     softmax_scale: float,
     block_size: int = 128,
+    sparse_attention: bool = False,
 ) -> MultiHeadAttentionImpl:
     """Returns a jitted "flash" multihead-attention implementation for the given backend.
 
@@ -91,6 +93,7 @@ def flash_attention_implementation(
         block_size: The size of the computation-block unit, only applies to the 'tpu' backend.
             A multiple of 128, and should be less than the target sequence length.
             Smaller values are more memory efficient but less compute efficient.
+        sparse_attention: Whether to use sparse attention, only available for the 'tpu' backend now.
 
     Returns:
         A jitted function implementing multi-head attention for the given backend.
@@ -99,6 +102,7 @@ def flash_attention_implementation(
         NotImplementedError: If implementation for the backend is not available.
     """
     if backend == "gpu":
+        assert not sparse_attention, "Sparse attention not supported on GPU."
         # Lazy import GPU flash-attention to avoid file-level dependency on jax-triton.
         # pylint: disable-next=import-outside-toplevel
         from axlearn.common.flash_attention.gpu_attention import (
@@ -129,6 +133,21 @@ def flash_attention_implementation(
             block_k_dq=block_size,
             block_q_dq=block_size,
         )
+        # Return a sparse flash attention implementation.
+        if sparse_attention:
+
+            @jax.jit
+            def jit_attn(query, key, value, bias):
+                assert bias is None, "Sparse attention does not support bias."
+                return tpu_splash_attention(
+                    query,
+                    key,
+                    value,
+                    causal=causal,
+                    block_sizes=block_sizes,
+                )
+
+            return jit_attn
 
         # shard_map-decorated function needs to be jitted.
         @jax.jit
@@ -148,6 +167,7 @@ def flash_attention_implementation(
 
     elif backend == "cpu":
         logging.warning("Flash attention CPU backend is for testing only.")
+        assert not sparse_attention, "Sparse attention not supported on CPU."
 
         # shard_map-decorated function needs to be jitted.
         @jax.jit
