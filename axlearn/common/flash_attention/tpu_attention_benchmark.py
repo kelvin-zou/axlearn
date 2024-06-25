@@ -96,7 +96,7 @@ def _benchmark(
     q = jax.random.normal(k1, (batch_size, seq_len, num_heads, per_head_dim), dtype=jnp.bfloat16)
     k = jax.random.normal(k2, (batch_size, seq_len, num_heads, per_head_dim), dtype=jnp.bfloat16)
     v = jax.random.normal(k3, (batch_size, seq_len, num_heads, per_head_dim), dtype=jnp.bfloat16)
-    bias = jax.random.normal(k4, (batch_size, num_heads, seq_len, seq_len), dtype=jnp.bfloat16)
+    bias = None
 
     softmax_scale = per_head_dim**-0.5
     ref_fwd_time = _time_call(

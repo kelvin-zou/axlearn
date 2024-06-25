@@ -93,7 +93,6 @@ def flash_attention_implementation(
         block_size: The size of the computation-block unit, only applies to the 'tpu' backend.
             A multiple of 128, and should be less than the target sequence length.
             Smaller values are more memory efficient but less compute efficient.
-        sparse_attention: Whether to use sparse attention, only available for the 'tpu' backend now.
 
     Returns:
         A jitted function implementing multi-head attention for the given backend.
@@ -119,20 +118,6 @@ def flash_attention_implementation(
         return jit_attn
 
     elif backend == "tpu":
-        # TODO(tom_gunter): See if we can do better block-size tuning.
-        block_sizes = BlockSizes(
-            block_q=block_size,
-            block_k_major=block_size,
-            block_k=block_size,
-            block_b=1,
-            block_q_major_dkv=block_size,
-            block_k_major_dkv=block_size,
-            block_k_dkv=block_size,
-            block_q_dkv=block_size,
-            block_k_major_dq=block_size,
-            block_k_dq=block_size,
-            block_q_dq=block_size,
-        )
         # Return a sparse flash attention implementation.
         if sparse_attention:
 
@@ -144,11 +129,12 @@ def flash_attention_implementation(
                     key,
                     value,
                     causal=causal,
-                    block_sizes=block_sizes,
+                    block_size=block_size,
                 )
 
             return jit_attn
 
+        # TODO(tom_gunter): See if we can do better block-size tuning.
         # shard_map-decorated function needs to be jitted.
         @jax.jit
         def jit_attn(query, key, value, bias):
@@ -159,7 +145,7 @@ def flash_attention_implementation(
                 bias=bias,
                 causal=causal,
                 softmax_scale=softmax_scale,
-                block_sizes=block_sizes,
+                block_size=block_size,
             )
             return context
 
@@ -167,7 +153,7 @@ def flash_attention_implementation(
 
     elif backend == "cpu":
         logging.warning("Flash attention CPU backend is for testing only.")
-        assert not sparse_attention, "Sparse attention not supported on CPU."
+        assert not sparse_attention, "Sparse attention not supported on GPU."
 
         # shard_map-decorated function needs to be jitted.
         @jax.jit

@@ -6,13 +6,15 @@ from typing import Optional
 
 import jax
 import jax.numpy as jnp
-from jax.experimental.pallas.ops.tpu.flash_attention import BlockSizes
-from jax.experimental.pallas.ops.tpu.flash_attention import flash_attention as tpu_flash_attention
+from jax.experimental.pallas.ops.tpu.flash_attention import (
+    BlockSizes as FlashBlockSizes,
+    flash_attention as tpu_flash_attention,
+) 
 from jax.experimental.pallas.ops.tpu.splash_attention import (
     splash_attention_kernel,
     splash_attention_mask,
+    BlockSizes as SplashBlockSizes,
 )
-
 from axlearn.common.utils import Tensor
 
 
@@ -32,7 +34,7 @@ def flash_attention(
     *,
     causal: bool = False,
     softmax_scale: float = 1.0,
-    block_sizes: Optional[BlockSizes] = None,
+    block_size: int = 128,
 ):
     """Wraps JAX's TPU flash-attention, with reshapes and softmax-scaling outside kernel.
 
@@ -47,12 +49,28 @@ def flash_attention(
         bias: The attention biases, of shape [batch_size, num_heads, q_seq_len, source_seq_len].
         causal: Whether the attention is causal (allows for additional optimizations).
         softmax_scale: A scaling factor applied to the query.
-        block_sizes: The block sizes for the attention kernel.
+        block_size: The block size for the attention kernel.
 
     Returns:
         The context tensor, of shape [batch_size, q_seq_len, num_heads, head_dim].
 
     """
+    if block_size is None:
+        block_size = 128
+
+    block_sizes = FlashBlockSizes(
+        block_q=block_size,
+        block_k_major=block_size,
+        block_k=block_size,
+        block_b=1,
+        block_q_major_dkv=block_size,
+        block_k_major_dkv=block_size,
+        block_k_dkv=block_size,
+        block_q_dkv=block_size,
+        block_k_major_dq=block_size,
+        block_k_dq=block_size,
+        block_q_dq=block_size,
+    )
     # Apply the softmax scale outside the kernel (see docstring for why).
     if softmax_scale != 1.0:
         query *= softmax_scale
@@ -90,7 +108,7 @@ def splash_attention(
     *,
     causal: bool = False,
     softmax_scale: float = 1.0,
-    block_sizes: Optional[BlockSizes] = None,
+    block_size: int = 128,
 ):
     """Wraps JAX's TPU splash-attention, with reshapes and softmax-scaling outside kernel.
 
@@ -104,7 +122,7 @@ def splash_attention(
         value: The value tensor, of shape [batch_size, source_seq_len, num_heads, head_dim].
         causal: Whether the attention is causal (allows for additional optimizations).
         softmax_scale: A scaling factor applied to the query.
-        block_sizes: The block sizes for the attention kernel.
+        block_size: The block size for the attention kernel.
 
     Returns:
         The context tensor, of shape [batch_size, q_seq_len, num_heads, head_dim].
@@ -117,7 +135,16 @@ def splash_attention(
     query = jnp.einsum("btnh->bnth", query)
     key = jnp.einsum("bsnh->bnsh", key)
     value = jnp.einsum("bsnh->bnsh", value)
-
+    block_sizes = SplashBlockSizes(
+        block_q=min(block_size, query.shape[2]),
+        block_kv_compute=min(block_size, key.shape[2]),
+        block_kv=min(block_size, key.shape[2]),
+        block_q_dkv=min(block_size, query.shape[2]),
+        block_kv_dkv=min(block_size, key.shape[2]),
+        block_kv_dkv_compute=min(block_size, query.shape[2]),
+        block_q_dq=min(block_size, query.shape[2]),
+        block_kv_dq=min(block_size, query.shape[2]),
+    )
     def wrap_splash_attention(query, key, value):
         multi_head_mask = None
         if causal:
