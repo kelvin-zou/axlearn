@@ -126,12 +126,8 @@ def _benchmark(
     )
     flash_bwd_time = _time_call(lambda: flash_grad_fn(q, k, v, bias)[0])
 
-    print(
-        f"ref_fwd:{ref_fwd_time:.4f}s, flash_fwd:{flash_fwd_time:.4f}s"
-    )
-    print(
-        f"ref_bwd:{ref_bwd_time:.4f}s, flash_bwd:{flash_bwd_time:.4f}s\n"
-    )
+    print(f"ref_fwd:{ref_fwd_time:.4f}s, flash_fwd:{flash_fwd_time:.4f}s")
+    print(f"ref_bwd:{ref_bwd_time:.4f}s, flash_bwd:{flash_bwd_time:.4f}s\n")
 
 
 if __name__ == "__main__":

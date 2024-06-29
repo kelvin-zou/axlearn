@@ -6,15 +6,14 @@ from typing import Optional
 
 import jax
 import jax.numpy as jnp
-from jax.experimental.pallas.ops.tpu.flash_attention import (
-    BlockSizes as FlashBlockSizes,
-    flash_attention as tpu_flash_attention, 
-)
+from jax.experimental.pallas.ops.tpu.flash_attention import BlockSizes as FlashBlockSizes
+from jax.experimental.pallas.ops.tpu.flash_attention import flash_attention as tpu_flash_attention
+from jax.experimental.pallas.ops.tpu.splash_attention import BlockSizes as SplashBlockSizes
 from jax.experimental.pallas.ops.tpu.splash_attention import (
-    BlockSizes as SplashBlockSizes,
     splash_attention_kernel,
     splash_attention_mask,
 )
+
 from axlearn.common.utils import Tensor
 
 
@@ -59,8 +58,8 @@ def flash_attention(
     # Apply the softmax scale outside the kernel (see docstring for why).
     if softmax_scale != 1.0:
         query *= softmax_scale
-    
-    # Cap block size to sequence length.    
+
+    # Cap block size to sequence length.
     block_size = min(block_size, query.shape[1])
 
     # Switch num_heads and seq_len axes.
@@ -68,8 +67,11 @@ def flash_attention(
     key = jnp.einsum("bsnh->bnsh", key)
     value = jnp.einsum("bsnh->bnsh", value)
 
-    # Fall back to flash attention if the query shape is not divisible by 128 or bias is not None.
-    splash_attention = splash_attention and query.shape[3] % 128 == 0 and bias is None
+    # Fall back to flash attention if hitting one of the following conditions:
+    # 1. the query shape is not divisible by 128, which is not supported in splash attention.
+    # 2. bias is not None, which is not supported in splash attention.
+    # 3. causal is False, splash attention cannot support model without a mask.
+    splash_attention = splash_attention and query.shape[3] % 128 == 0 and bias is None and causal
 
     if splash_attention:
         block_sizes = SplashBlockSizes(
@@ -83,16 +85,13 @@ def flash_attention(
             block_kv_dq=block_size,
         )
 
-        def wrap_splash_attention(query, key, value):
+        def tpu_splash_attention(query, key, value):
             # Splash Attention can support multiple mask types,
             # Now we only support causal and full masks, which makes it equivalent to FlashAttention.
-            if causal:
-                masks = [
-                    splash_attention_mask.CausalMask(shape=(query.shape[2], query.shape[2]))
-                    for i in range(query.shape[1])
-                ]
-            else:
-                masks = [splash_attention_mask.FullMask() for i in range(query.shape[1]) ]
+            masks = [
+                splash_attention_mask.CausalMask(shape=(query.shape[2], query.shape[2]))
+                for i in range(query.shape[1])
+            ]
             multi_head_mask = splash_attention_mask.MultiHeadMask(masks=masks)
 
             splash_kernel = splash_attention_kernel.make_splash_mha(
@@ -100,7 +99,7 @@ def flash_attention(
             )
             return jax.vmap(splash_kernel)(query, key, value)
 
-        context = wrap_splash_attention(query, key, value)
+        context = tpu_splash_attention(query, key, value)
 
     else:
         block_sizes = FlashBlockSizes(
