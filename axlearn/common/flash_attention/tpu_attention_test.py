@@ -38,6 +38,18 @@ class TestFlashAttention(TestCase):
             num_heads=4,
             per_head_dim=64,
         ),
+        dict(
+            batch_size=2,
+            seq_len=2048,
+            num_heads=4,
+            per_head_dim=128,
+        ),
+        dict(
+            batch_size=8,
+            seq_len=4096,
+            num_heads=4,
+            per_head_dim=128,
+        ),
     ]
 
     @parameterized.product(

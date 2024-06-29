@@ -40,10 +40,11 @@ import jax.numpy as jnp
 
 from axlearn.common.flash_attention.utils import flash_attention_implementation, mha_reference
 
+# Splash Attention cannot support per_head_dim < 128, we always fall back to Flash Attention.
 _BENCHMARK_CONFIGS = {
-    "1.2b": dict(
-        num_heads=32,
-        per_head_dim=64,
+    "2.9b": dict(
+        num_heads=24,
+        per_head_dim=128,
     ),
     "12.6b": dict(
         num_heads=40,
@@ -125,17 +126,12 @@ def _benchmark(
     )
     flash_bwd_time = _time_call(lambda: flash_grad_fn(q, k, v, bias)[0])
 
-    splash_impl = flash_attention_implementation(
-        "tpu", causal=causal, softmax_scale=softmax_scale, block_size=block_size, sparse_attention=True
+    print(
+        f"ref_fwd:{ref_fwd_time:.4f}s, flash_fwd:{flash_fwd_time:.4f}s"
     )
-    splash_fwd_time = _time_call(lambda: splash_impl(q, k, v, bias))
-    splash_grad_fn = jax.jit(
-        jax.grad(lambda q, k, v, b: splash_impl(q, k, v, b).mean(), argnums=(0, 1, 2))
+    print(
+        f"ref_bwd:{ref_bwd_time:.4f}s, flash_bwd:{flash_bwd_time:.4f}s\n"
     )
-    splash_bwd_time = _time_call(lambda: splash_grad_fn(q, k, v, bias)[0])
-
-    print(f"ref_fwd:{ref_fwd_time:.4f}s, flash_fwd:{flash_fwd_time:.4f}s, splash:_fwd{splash_fwd_time:.4f}s")
-    print(f"ref_bwd:{ref_bwd_time:.4f}s, flash_bwd:{flash_bwd_time:.4f}s, splash:_bwd{splash_bwd_time:.4f}s\n")
 
 
 if __name__ == "__main__":
