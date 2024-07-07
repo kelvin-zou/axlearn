@@ -41,13 +41,13 @@ def _trainer_kwargs() -> Dict[str, Dict[str, Any]]:
     emb_cfg.token_emb.param_partition_spec = ("pipeline", "model")
     model_cfg = common_model_config(
         # See page 10 for model dims.
-        num_layers=64,
-        hidden_dim=128 * 32,
-        num_heads=64,
+        num_layers=4,
+        hidden_dim=128 * 4,
+        num_heads=4,
         # See table 4 for pipelining configurations.
         stack_cfg=PipelinedTransformerLayer.default_config().set(
             num_stages=2,
-            num_microbatches=16,
+            num_microbatches=2,
         ),
         vocab_size=_VOCAB_SIZE,
         ffn_dim=scaled_hidden_dim(4),
@@ -71,11 +71,11 @@ def _trainer_kwargs() -> Dict[str, Dict[str, Any]]:
         make_config_name("gspmd", "16B", suffix="-2x16x8"): dict(
             model_cfg=model_cfg,
             learner_cfg=learner_cfg,
-            train_batch_size=512,
+            train_batch_size=32,
             max_step=_MAX_STEP,
             mesh_shape=HybridMeshShape(
-                ici_mesh_shape=mesh_shape_from_axes(data=-1, model=8),
-                dcn_mesh_shape=mesh_shape_from_axes(data=-1, pipeline=2),
+                ici_mesh_shape=mesh_shape_from_axes(pipeline=2, data=-1, model=2),
+                dcn_mesh_shape=mesh_shape_from_axes(data=-1),
             ),
         ),
     }
