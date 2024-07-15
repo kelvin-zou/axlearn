@@ -61,12 +61,14 @@ def transpose_to_pipeline_stage_inputs(x: Tensor, partition_spec: Optional[Parti
     n, m = x.shape[:2]
     # [N, M + N, ...].
     x = jnp.pad(x, [(0, 0), (0, n)] + [(0, 0)] * (x.ndim - 2))
+    jax.debug.print("padding x is {x}", x=x)
     # [N * (M + N), ...].
     x = jnp.reshape(x, [-1] + list(x.shape[2:]))
     # [N * (M + N - 1), ...].
     x = x[:-n]
     # [N, M + N - 1, ...].
     x = jnp.reshape(x, [n, m + n - 1] + list(x.shape[1:]))
+    jax.debug.print("truncate and reshape x is {x}", x=x)
     # Apply sharding constraints at the first opportunity after reshapes
     # (i.e. when the input is first in the right shape for the constraint again).
     if partition_spec is not None:
@@ -304,92 +306,137 @@ class Pipeline(BaseLayer):
                 self.vlog(3, "output_collection_tn=%s", shapes(output_collection_tn))
                 return dict(carry=carry_tn, y=y_tn, output_collection=output_collection_tn)
 
+            # @functools.partial(
+            #     jax.ad_checkpoint.checkpoint,
+            #     prevent_cse=False,
+            #     policy=jax.checkpoint_policies.nothing_saveable,
+            # )
+            # def scan_fn(
+            #     carry_in: NestedTensor,
+            #     xs_t: Tuple[NestedTensor, NestedTensor],
+            # ):
+            #     """Processes timestep `t` in the pipeline (in parallel across pipeline stages).
+
+            #     Args:
+            #         carry_in: A NestedTensor containing loop state carried across scan iterations.
+            #         xs_t: A tuple (prng_key_t, x_t). Each is a NestedTensor with leaves of shape
+            #             [N, ...] or [1, ...].
+
+            #     Returns:
+            #         (carry_out, ys_t), where:
+            #         - `carry_out` will be used as `carry_in` in the next scan iteration, and thus
+            #             has the same structure and shape as `carry_in`.
+            #         - `ys_t` is dict(carry=..., y=..., output_collection=...) and will be stacked as
+            #             `ys` after scan is done.
+            #             Note that `carry` does not necessarily have the same structure as
+            #             `carry_out`, and represents the stage-wise carry output from `fn` with
+            #             leaves of shape [N, ...]. While only last-stage outputs are needed, we
+            #             retain [N, ...] for consistent sharding.
+            #             `y` is a `NestedTensor` representing the stage-wise output of `fn` with
+            #             leaves of shape [N, ...].
+            #             `output_collection` is an `OutputCollection` representing the auxiliary
+            #             outputs of `fn` with leaves of shape [N, ...].
+            #     """
+
+            #     # Input state.
+            #     t = carry_in["t"]
+            #     carry_output_t_1 = carry_in["carry_output_t_1"]
+            #     per_stage_inputs = carry_in["per_stage_inputs"]
+
+            #     # Per-timestep inputs. Each leaf tensor has shape [N, ...] or [1, ...].
+            #     prng_key_t, x_t = xs_t
+            #     jax.debug.print("xs_t is {x}, xs is {y}", x=prng_key_t, y=x_t)
+
+            #     # Compute vmap inputs. When t >= m, we feed dummy inputs to the pipeline until the
+            #     # pipeline is flushed. Note that at the end of all iterations we only extract the
+            #     # last-stage outputs from the stacked vmap outputs.
+            #     # Leaves are of shape [N, ...] representing per-stage inputs.
+            #     vmap_in = self._compute_carry_input(per_stage_inputs, carry_output_t_1, t=t)
+
+            #     # Use stop_gradient for invalid (bubble) microbatch iterations. This jnp.where will
+            #     # be optimized away by XLA, but in the backward pass it will be masking with zeros.
+            #     state = jax.tree_util.tree_map(
+            #         lambda x: jnp.where(self._is_valid_stage(x, t=t), x, jax.lax.stop_gradient(x)),
+            #         layer_context.state,
+            #     )
+
+            #     # Parallel processing along the N axis.
+            #     vmap_out = jax.vmap(vmap_fn)(state, prng_key_t, vmap_in, x_t)
+            #     self.vlog(3, "vmap_out.output_collection=%s", shapes(vmap_out["output_collection"]))
+            #     jax.debug.print("vmap_out.carry is {x}", x=vmap_out["carry"])
+            #     # Output state.
+            #     carry_out = dict(
+            #         t=t + 1,
+            #         carry_output_t_1=vmap_out["carry"],
+            #         per_stage_inputs=per_stage_inputs,
+            #     )
+            #     # TODO(markblee): Consider slicing out just the last-stage outputs of vmap_out.
+            #     # Note that vmap outputs are typically sharded over stages and may incur extra
+            #     # communication per-iteration (e.g. from broadcasting last stage outputs).
+            #     return carry_out, vmap_out
+
+            # state_t0 = dict(
+            #     # Current loop iteration.
+            #     t=jnp.array(0, dtype=jnp.int32),
+            #     # [N, microbatch_size, ...].
+            #     carry_output_t_1=jax.tree_util.tree_map(
+            #         lambda x: jnp.zeros((n,) + x.shape[1:], dtype=x.dtype), carry
+            #     ),
+            #     # [M, N, microbatch_size, ...].
+            #     per_stage_inputs=per_stage_inputs,
+            # )
+            # self.vlog(
+            #     2,
+            #     "state_t0=%s prng_keys=%s padded_xs=%s",
+            #     shapes(state_t0),
+            #     shapes(prng_keys),
+            #     shapes(padded_xs),
+            # )
+
+            # _, scan_ys = jax.lax.scan(scan_fn, init=state_t0, xs=(prng_keys, padded_xs))
+
             @functools.partial(
                 jax.ad_checkpoint.checkpoint,
                 prevent_cse=False,
-                policy=jax.checkpoint_policies.nothing_saveable,
+                policy=jax.checkpoint_policies.dots_saveable,
             )
-            def scan_fn(
-                carry_in: NestedTensor,
-                xs_t: Tuple[NestedTensor, NestedTensor],
-            ):
-                """Processes timestep `t` in the pipeline (in parallel across pipeline stages).
-
-                Args:
-                    carry_in: A NestedTensor containing loop state carried across scan iterations.
-                    xs_t: A tuple (prng_key_t, x_t). Each is a NestedTensor with leaves of shape
-                        [N, ...] or [1, ...].
-
-                Returns:
-                    (carry_out, ys_t), where:
-                    - `carry_out` will be used as `carry_in` in the next scan iteration, and thus
-                        has the same structure and shape as `carry_in`.
-                    - `ys_t` is dict(carry=..., y=..., output_collection=...) and will be stacked as
-                        `ys` after scan is done.
-                        Note that `carry` does not necessarily have the same structure as
-                        `carry_out`, and represents the stage-wise carry output from `fn` with
-                        leaves of shape [N, ...]. While only last-stage outputs are needed, we
-                        retain [N, ...] for consistent sharding.
-                        `y` is a `NestedTensor` representing the stage-wise output of `fn` with
-                        leaves of shape [N, ...].
-                        `output_collection` is an `OutputCollection` representing the auxiliary
-                        outputs of `fn` with leaves of shape [N, ...].
-                """
-
-                # Input state.
-                t = carry_in["t"]
-                carry_output_t_1 = carry_in["carry_output_t_1"]
-                per_stage_inputs = carry_in["per_stage_inputs"]
-
-                # Per-timestep inputs. Each leaf tensor has shape [N, ...] or [1, ...].
+            def pipeline_fn(per_stage_inputs, carry_input, 
+                            xs_t: Tuple[NestedTensor, NestedTensor]):
+                # Iterate over m microbatches.
                 prng_key_t, x_t = xs_t
+                # ys includes a list of tensors for m+n-1 timesteps.
+                ys = []
+                output_collections = []
+                carry_outputs = []
+                
+                # Go through the pipeline stages.
+                for i in range(m+n-1):
+                    # select input or xs for the current input.
+                    vmap_in = self._compute_carry_input(per_stage_inputs, carry_input, t=i)
+                    # Using stop_gradient to determine if we need to update.
+                    state = jax.tree_util.tree_map(
+                        lambda x: jnp.where(self._is_valid_stage(x, t=i), x, jax.lax.stop_gradient(x)),
+                        layer_context.state,
+                    )
+                    x_curr = jax.tree_util.tree_map(lambda x, i=i: x[i], x_t)
+                    vmap_out = jax.vmap(vmap_fn)(state, prng_key_t[i], vmap_in, x_curr)
+                    carry_output = vmap_out["carry"]
+                    carry_outputs.append(carry_output)
+                    ys.append(vmap_out["y"])
+                    jax.debug.print("vmap_out.carry is {x}", x=carry_output)
+                    carry_input = carry_output
+                    output_collections.append(vmap_out["output_collection"])
 
-                # Compute vmap inputs. When t >= m, we feed dummy inputs to the pipeline until the
-                # pipeline is flushed. Note that at the end of all iterations we only extract the
-                # last-stage outputs from the stacked vmap outputs.
-                # Leaves are of shape [N, ...] representing per-stage inputs.
-                vmap_in = self._compute_carry_input(per_stage_inputs, carry_output_t_1, t=t)
+                # Build the final output.
+                vmap_out["carry"] = jnp.stack(carry_outputs)
+                vmap_out["y"] = jnp.stack(ys)
+                vmap_out["output_collection"] = jax.tree_util.tree_map(lambda *args: jnp.stack(args), *output_collections)
+                return vmap_out
 
-                # Use stop_gradient for invalid (bubble) microbatch iterations. This jnp.where will
-                # be optimized away by XLA, but in the backward pass it will be masking with zeros.
-                state = jax.tree_util.tree_map(
-                    lambda x: jnp.where(self._is_valid_stage(x, t=t), x, jax.lax.stop_gradient(x)),
-                    layer_context.state,
-                )
-
-                # Parallel processing along the N axis.
-                vmap_out = jax.vmap(vmap_fn)(state, prng_key_t, vmap_in, x_t)
-                self.vlog(3, "vmap_out.output_collection=%s", shapes(vmap_out["output_collection"]))
-
-                # Output state.
-                carry_out = dict(
-                    t=t + 1,
-                    carry_output_t_1=vmap_out["carry"],
-                    per_stage_inputs=per_stage_inputs,
-                )
-                # TODO(markblee): Consider slicing out just the last-stage outputs of vmap_out.
-                # Note that vmap outputs are typically sharded over stages and may incur extra
-                # communication per-iteration (e.g. from broadcasting last stage outputs).
-                return carry_out, vmap_out
-
-            state_t0 = dict(
-                # Current loop iteration.
-                t=jnp.array(0, dtype=jnp.int32),
-                # [N, microbatch_size, ...].
-                carry_output_t_1=jax.tree_util.tree_map(
+            carry_output = jax.tree_util.tree_map(
                     lambda x: jnp.zeros((n,) + x.shape[1:], dtype=x.dtype), carry
-                ),
-                # [M, N, microbatch_size, ...].
-                per_stage_inputs=per_stage_inputs,
-            )
-            self.vlog(
-                2,
-                "state_t0=%s prng_keys=%s padded_xs=%s",
-                shapes(state_t0),
-                shapes(prng_keys),
-                shapes(padded_xs),
-            )
-            _, scan_ys = jax.lax.scan(scan_fn, init=state_t0, xs=(prng_keys, padded_xs))
+                )
+            scan_ys = pipeline_fn(per_stage_inputs, carry_output, (prng_keys, padded_xs))
 
             def extract_outputs(x: Tensor, partition_spec: PartitionSpec) -> Tensor:
                 # Extract the last-stage outputs at each iteration from the stacked carry. Note
@@ -401,9 +448,13 @@ class Pipeline(BaseLayer):
                 )
                 return with_sharding_constraint(x, partition_spec)
 
+            carry_out = scan_ys.pop("carry")
+            jax.debug.print("carry_out is {x}", x=carry_out)
             final_carry = jax.tree_util.tree_map(
-                extract_outputs, scan_ys.pop("carry"), carry_partition_spec
+                extract_outputs, carry_out, carry_partition_spec
             )
+            self.vlog(3, "final_carry=%s", shapes(final_carry))
+            jax.debug.print("final carry values are{x}", x=final_carry)
 
             ys = scan_ys["y"]
             if ys_partition_spec is None:
@@ -414,9 +465,12 @@ class Pipeline(BaseLayer):
                     ys,
                 )
             # Transpose from pipeline-major [N + M - 1, N, ...] back to layer-major [N, M, ...].
+            jax.debug.print("ys before transform is {x}", x=ys)
             ys = jax.tree_util.tree_map(
                 transpose_from_pipeline_stage_outputs, ys, ys_partition_spec
             )
+            jax.debug.print("ys after transform is {x}", x=ys)
+
             self.vlog(3, "scan_ys.output_collection=%s", shapes(scan_ys["output_collection"]))
             layer_output_collection.update(
                 jax.tree_util.tree_map(
@@ -477,10 +531,16 @@ class Pipeline(BaseLayer):
             # fed into subsequent stages.
             ndim = v_carry_output_t_1.ndim
             padding = [(1, 0)] + [(0, 0)] * (ndim - 1)
+            jax.debug.print("before v_carry_output_t_1 is {x} and paddig is {y} and stage is {z}", 
+                            x=v_carry_output_t_1,
+                            y=padding,
+                            z=per_stage_inputs)
             # Use lax.slice to guarantee the gradient is a pad.
             v_carry_output_t_1 = jax.lax.slice(
                 jnp.pad(v_carry_output_t_1, padding), [0] * ndim, v_carry_output_t_1.shape
             )
+            jax.debug.print("after v_carry_output_t_1 is {x}", x=v_carry_output_t_1)
+            
             # v_carry_input_t[0, ...] = v_input_t[0, ...].
             # v_carry_input_t[n, ...] = v_carry_output_t_1[n, ...] for n > 0.
             return jnp.where(
