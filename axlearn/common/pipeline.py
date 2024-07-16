@@ -389,7 +389,7 @@ class Pipeline(BaseLayer):
                 shapes(prng_keys),
                 shapes(padded_xs),
             )
-            _, scan_ys = jax.lax.scan(scan_fn, init=state_t0, xs=(prng_keys, padded_xs))
+            _, scan_ys = jax.lax.scan(scan_fn, init=state_t0, xs=(prng_keys, padded_xs), unroll=8)
 
             def extract_outputs(x: Tensor, partition_spec: PartitionSpec) -> Tensor:
                 # Extract the last-stage outputs at each iteration from the stacked carry. Note
