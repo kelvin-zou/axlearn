@@ -879,7 +879,7 @@ class QKVLinear(BaseQKVLinear):
 
     @config_class
     class Config(BaseQKVLinear.Config):
-        """Configures for QKVLinear."""
+        """Configures QKVLinear."""
 
         # The layer used to project.
         layer: MultiheadInputLinear.Config = MultiheadInputLinear.default_config()
@@ -958,7 +958,7 @@ class QLinear(BaseQKVLinear):
 
     @config_class
     class Config(BaseQKVLinear.Config):
-        """Configures for QKVLinear."""
+        """Configures QLinear."""
 
         # The layer used to project.
         layer: MultiheadInputLinear.Config = MultiheadInputLinear.default_config()
@@ -1005,7 +1005,7 @@ class FusedQKVLinear(BaseQKVLinear):
 
     @config_class
     class Config(BaseQKVLinear.Config):
-        """Configures for FusedQKVLinear."""
+        """Configures FusedQKVLinear."""
 
         # The layer used to project.
         layer: MultiheadInputLinear.Config = MultiheadInputLinear.default_config()
@@ -1440,7 +1440,7 @@ class BaseScaleQK(BaseLayer):
 
     @config_class
     class Config(BaseLayer.Config):
-        """Configures BaseScaleQKV."""
+        """Configures BaseScaleQK."""
 
         # The per-head dimension.
         per_head_dim: Required[int] = REQUIRED
@@ -1526,7 +1526,7 @@ class ScaleKey(BaseScaleQK):
 
     @config_class
     class Config(BaseScaleQK.Config):
-        """Configures ScaleQuery."""
+        """Configures ScaleKey."""
 
         # The config for a normalization layer applied along the per-head dim.
         # If None, no normalization is applied.
@@ -3537,7 +3537,7 @@ class _TransformerRepeat(Repeat):
 
     @config_class
     class Config(Repeat.Config):
-        """Configures QKVLinearWithExternalKVState."""
+        """Configures _TransformerRepeat."""
 
         # The additional fields of BaseTransformerLayer.Output that should propagate as input to
         # the next layer.
@@ -3803,6 +3803,8 @@ class PipelinedTransformerLayer(BaseStackedTransformerLayer):
         num_microbatches: Required[int] = REQUIRED
         # Config for each stage in the pipeline.
         stage: BaseLayer.Config = StackedTransformerLayer.default_config().set(layer=None)
+        # Config for the pipeline implementation, such as pipeline schedule.
+        pipeline: _TransformerPipeline.Config = _TransformerPipeline.default_config()
 
     def __init__(self, cfg: Config, *, parent: Optional[Module]):
         super().__init__(cfg, parent=parent)
@@ -3813,7 +3815,7 @@ class PipelinedTransformerLayer(BaseStackedTransformerLayer):
         stage_cfg = cfg.stage.set(
             input_dim=cfg.input_dim, layer=cfg.layer, num_layers=num_layers_per_stage
         )
-        pipeline_cfg = _TransformerPipeline.default_config().set(
+        pipeline_cfg = cfg.pipeline.set(
             layer=stage_cfg, num_layers=cfg.num_stages, num_microbatches=cfg.num_microbatches
         )
         self._add_child("pipeline", pipeline_cfg)
