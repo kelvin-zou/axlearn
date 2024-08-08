@@ -34,18 +34,18 @@ if num_tpu_slices > 1:
         "--xla_tpu_data_parallel_opt_different_sized_ops=true",
     ]
 
-# Borrowed from MaxText, which is universal across v5e and v5p.
-# https://github.com/google/maxtext/blob/main/MaxText/configs/v5e/16b.sh#L40
-TPU_XLA_OPT_FLAGS = [
-    "--xla_tpu_enable_data_parallel_all_reduce_opt=true",
-    "--xla_tpu_data_parallel_opt_different_sized_ops=true",
-    "--xla_tpu_enable_async_collective_fusion=true",
-    "--xla_tpu_enable_async_collective_fusion_fuse_all_gather=true",
-    "--xla_tpu_enable_async_collective_fusion_multiple_steps=true",
-    "--xla_tpu_overlap_compute_collective_tc=true",
-    "--xla_enable_async_all_gather=true",
-]
-libtpu_init_args += TPU_XLA_OPT_FLAGS
+# # Borrowed from MaxText, which is universal across v5e and v5p.
+# # https://github.com/google/maxtext/blob/main/MaxText/configs/v5e/16b.sh#L40
+# TPU_XLA_OPT_FLAGS = [
+#     "--xla_tpu_enable_data_parallel_all_reduce_opt=true",
+#     "--xla_tpu_data_parallel_opt_different_sized_ops=true",
+#     "--xla_tpu_enable_async_collective_fusion=true",
+#     "--xla_tpu_enable_async_collective_fusion_fuse_all_gather=true",
+#     "--xla_tpu_enable_async_collective_fusion_multiple_steps=true",
+#     "--xla_tpu_overlap_compute_collective_tc=true",
+#     "--xla_enable_async_all_gather=true",
+# ]
+# libtpu_init_args += TPU_XLA_OPT_FLAGS
 
 os.environ["LIBTPU_INIT_ARGS"] = " ".join(libtpu_init_args)
 
