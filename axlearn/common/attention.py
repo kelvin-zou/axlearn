@@ -3859,6 +3859,7 @@ def build_remat_spec(
     ],
     self_attention: bool = True,
     feed_forward: bool = False,
+    offload_to_host: bool = False,
 ) -> Optional[RematSpec]:
     """Configures how the Transformer or Conformer stack will save the linearization points.
 
@@ -3898,9 +3899,11 @@ def build_remat_spec(
         prevent_cse=stack_cfg.klass is StackedTransformerLayer,
         # If we are running inside a jax.lax.scan (Repeated/Pipelined transformers
         # or Repeated Conformers) we can enable common subexpression elimination optimizations.
-        policy=config_for_function(jax_remat_policies.save_only_these_names).set(
-            names_which_can_be_saved=checkpoints
-        ),
+        policy=config_for_function(
+            jax_remat_policies.save_and_offload_only_these_names
+            if offload_to_host
+            else jax_remat_policies.save_only_these_names
+        ).set(names_which_can_be_saved=checkpoints),
     )
 
 
