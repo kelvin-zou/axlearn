@@ -375,20 +375,22 @@ def trainer_configs(
             )
         if model_size == "70B":
 
-            def make_config_for_tpulitepod(base_config_name: str) -> SpmdTrainer.Config:
+            def make_config_with_act_offload(base_config_name: str) -> SpmdTrainer.Config:
                 """Make configs for the v5e/v6e tpu with low HBM"""
                 # pytype: disable=annotation-type-mismatch
                 cfg: SpmdTrainer.Config = config_map[base_config_name]().clone()
                 # pytype: enable=annotation-type-mismatch
                 cfg.model.decoder.transformer.layer.remat_spec = build_remat_spec(
-                    cfg.model.decoder.transformer.layer.config,
+                    cfg.model.decoder.transformer,
                     self_attention=True,
                     feed_forward=True,
                     offload_to_host=True,
                 )
                 return cfg
 
-            make_litepod_config_func = functools.partial(make_config_for_tpulitepod, config_name)
+            make_litepod_config_func = functools.partial(make_config_with_act_offload, config_name)
+            # We add -litepod to the config name for v5e/v6e.
+            # Due to limited HBM, we offload some activations to host mem.
             config_map[f"{config_name}-litepod"] = make_litepod_config_func
 
     return config_map
