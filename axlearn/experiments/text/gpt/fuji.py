@@ -44,7 +44,7 @@ from axlearn.experiments.text.gpt.common import model_config as common_model_con
 from axlearn.experiments.text.gpt.common import scaled_hidden_dim, update_model_remat_config
 from axlearn.experiments.trainer_config_utils import TrainerConfigFn
 
-MODEL_SIZES = ("test", "7B", "70B")
+MODEL_SIZES = ("test", "7B", "70B", "405B")
 
 
 class Version(enum.Enum):
@@ -209,7 +209,6 @@ def get_trainer_kwargs(
                 ),
             ),
         )
-        
     elif model_size == "405B":
         trainer_kwargs = dict(
             model_kwargs=dict(
@@ -230,7 +229,8 @@ def get_trainer_kwargs(
             mesh_shape=mesh_shape_from_axes(fsdp=-1),
             mesh_rules=(
                 # tpu-v5e. step time: TBD.
-                ("tpu-v5litepod-256", mesh_shape_from_axes(data=-1, fsdp=64, model=8)),
+                ("tpu-v5litepod-256", mesh_shape_from_axes(data=-1, fsdp=32, model=8)),
+                ("tpu-v5litepod-256-b", mesh_shape_from_axes(data=-1, fsdp=16, model=16)),
             ),
         )
         
@@ -330,6 +330,9 @@ def trainer_configs(
     for version, model_size, flash_attention in itertools.product(
         Version, MODEL_SIZES, [True, False]
     ):
+        # 400B model is only available in V3.
+        if version!=Version.V3 and model_size=="405B":
+            continue
         vocab_size = VOCAB_SIZE[version]
         config_name = make_config_name(
             arch=arch,
@@ -426,7 +429,7 @@ def trainer_configs(
                 make_grad_accum_config, make_single_host_config_func, 4
             )
 
-        if model_size == "70B":
+        if model_size == "70B" or model_size == "405B":
 
             def make_config_with_act_offload(base_config_name: str) -> SpmdTrainer.Config:
                 """Make configs for the v5e/v6e tpu with low HBM."""
