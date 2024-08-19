@@ -114,7 +114,7 @@ mesh_axis_names[2]: 'expert'
 mesh_axis_names[3]: 'fsdp'
 mesh_axis_names[4]: 'seq'
 mesh_axis_names[5]: 'model'
-mesh_rules[0][0]: 'tpu-v5litepod-256'
+mesh_rules[0][0]: 'tpu-v5litepod-.*'
 mesh_rules[0][1][0]: 1
 mesh_rules[0][1][1]: -1
 mesh_rules[0][1][2]: 1
