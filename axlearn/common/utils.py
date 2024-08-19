@@ -44,6 +44,7 @@ from jax.experimental import maps, mesh_utils, multihost_utils
 from jax.sharding import PartitionSpec
 
 from axlearn.common import serialization
+from axlearn.common.base_layer import RematSpec
 from axlearn.common.config import is_named_tuple
 
 # New code should use Nested[XX] instead of NestedXX.
@@ -90,6 +91,19 @@ class HybridMeshShape:
     def __len__(self):
         assert len(self.ici_mesh_shape) == len(self.dcn_mesh_shape)
         return len(self.ici_mesh_shape)
+
+
+@dataclasses.dataclass
+class AdvancedMeshRule:
+    """A rule for advanced mesh configuration.
+
+    We allow the user to modify the mesh shape and other system-level
+    configurations like the remat rule and gradient accumulation.
+    """
+
+    mesh_shape: Optional[Union[MeshShape, HybridMeshShape]] = None
+    remat_rule: Optional[RematSpec] = None
+    grad_accumulation: int = 1
 
 
 @dataclasses.dataclass

@@ -30,7 +30,7 @@ from jax import numpy as jnp
 from jax.experimental import multihost_utils
 from jax.experimental.pjit import pjit
 
-from axlearn.common import measurement, utils
+from axlearn.common import config, measurement, utils
 from axlearn.common.base_layer import ParameterSpec
 from axlearn.common.base_model import BaseModel
 from axlearn.common.checkpointer import BaseCheckpointer, Checkpointer
@@ -43,7 +43,9 @@ from axlearn.common.config import (
     maybe_instantiate,
 )
 from axlearn.common.evaler import SpmdEvaler
+from axlearn.common.gradient_accumulation import with_minibatch_steps
 from axlearn.common.learner import Learner
+from axlearn.common.metrics import MetricAccumulator
 from axlearn.common.module import InvocationContext, Module, child_context, clone_context_stack
 from axlearn.common.module import functional as F
 from axlearn.common.module import install_context_stack, new_output_collection
@@ -53,6 +55,7 @@ from axlearn.common.state_builder import Builder as TrainerStateBuilder
 from axlearn.common.summary_writer import BaseWriter, SummaryWriter
 from axlearn.common.update_transformation import ForwardOutputs
 from axlearn.common.utils import (
+    AdvancedMeshRule,
     HybridMeshShape,
     MeshShape,
     Nested,
@@ -136,7 +139,9 @@ class SpmdTrainer(Module):
         # the mesh shape.
         #
         # If no rule matches, the default mesh configuration will be used.
-        mesh_rules: Optional[Sequence[Tuple[str, Optional[MeshShape]]]] = None
+        mesh_rules: Optional[
+            Sequence[Tuple[str, Optional[Union[MeshShape, HybridMeshShape, AdvancedMeshRule]]]]
+        ] = None
 
         # The model config.
         model: Required[BaseModel.Config] = REQUIRED
@@ -1076,16 +1081,30 @@ def select_mesh_config(trainer_config: SpmdTrainer.Config, *, mesh_selector: str
     """Selects a mesh rule (if one matches `mesh_selector` to override mesh config.
 
     If any of `trainer_config.mesh_rules` matches `mesh_selector`, modifies
-    `trainer_config.mesh_shape` according to the rule.
+    trainer_config according to the rule.
 
     Args:
         trainer_config: The trainer config. Will be modified if any mesh rule matches.
         mesh_selector: A string used to select the mesh rule to apply.
     """
     if trainer_config.mesh_rules:
-        mesh = match_regex_rules(
+        mesh_rule = match_regex_rules(
             mesh_selector, rules=trainer_config.mesh_rules, default_value=REQUIRED
         )
-        logging.info("Mesh selector %s matches mesh rule %s", mesh_selector, mesh)
-        if mesh is not REQUIRED:
-            trainer_config.mesh_shape = mesh
+        logging.info("Mesh selector %s matches mesh rule %s", mesh_selector, mesh_rule)
+        if mesh_rule is not REQUIRED:
+            # Mesh config is just mesh rule or hybrid mesh rule.
+            if type(mesh_rule) is HybridMeshShape or type(mesh_rule) is MeshShape:
+                trainer_config.mesh_shape = mesh_rule
+            elif type(mesh_rule) is AdvancedMeshRule:
+                if mesh_rule.mesh_shape is not None:
+                    trainer_config.mesh_shape = mesh_rule.mesh_shape
+                if mesh_rule.grad_accumulation > 1:
+                    trainer_config.learner.forward_fn_transformation = config.config_for_function(
+                        with_minibatch_steps
+                    ).set(
+                        steps=mesh_rule.grad_accumulation,
+                        metric_accumulator=MetricAccumulator.default_config(),
+                    )
+                if mesh_rule.remat_rule is not None:
+                    pass
