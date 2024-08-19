@@ -626,6 +626,8 @@ def get_trainer_config_fn(
     keep_every_n_steps: int = 50_000,
     save_every_n_steps: Optional[int] = None,
     init_state_builder: Optional[state_builder.Builder.Config] = None,
+    logical_batch_size: Optional[int] = None,
+    logical_feed_indices: Optional[Sequence[int]] = None,
 ) -> TrainerConfigFn:
     """Builds a TrainerConfigFn according to the model and input specs.
 
@@ -648,6 +650,8 @@ def get_trainer_config_fn(
         init_state_builder: Builder to initialize trainer states. If none, default initializer.
             Load a checkpoint using state_builder.TensorStoreStateStorageBuilder, setting `dir` to
             the checkpoint path (such as mixture_general_lm.PRETRAINED_CHECKPOINTS[config_name]).
+        logical_batch_size: The logical batch size for the model.
+        logical_feed_indices: The indices of the logical batch to feed to the model.
 
     Returns:
         A function that returns a trainer config.
@@ -666,6 +670,8 @@ def get_trainer_config_fn(
             processor=config_for_function(input_tf_data.identity),
             batcher=config_for_function(input_tf_data.batch).set(
                 global_batch_size=train_batch_size,
+                global_logical_batch_size=logical_batch_size,
+                logical_feed_indices=logical_feed_indices,
                 prefetch_buffer_size=tf.data.AUTOTUNE,
                 pad_example_fn=input_tf_data.default_pad_example_fn,
             ),
