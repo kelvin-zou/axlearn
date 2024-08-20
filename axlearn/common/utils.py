@@ -44,7 +44,6 @@ from jax.experimental import maps, mesh_utils, multihost_utils
 from jax.sharding import PartitionSpec
 
 from axlearn.common import serialization
-from axlearn.common.base_layer import RematSpec
 from axlearn.common.config import is_named_tuple
 
 # New code should use Nested[XX] instead of NestedXX.
@@ -102,7 +101,7 @@ class AdvancedMeshRule:
     """
 
     mesh_shape: Optional[Union[MeshShape, HybridMeshShape]] = None
-    remat_rule: Optional[RematSpec] = None
+    remat_policies: Optional[Optional[Callable[..., bool]]] = None
     grad_accumulation: int = 1
 
 
