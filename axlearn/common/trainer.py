@@ -1094,7 +1094,8 @@ def select_mesh_config(trainer_config: SpmdTrainer.Config, *, mesh_selector: str
         logging.info("Mesh selector %s matches mesh rule %s", mesh_selector, mesh_rule)
         if mesh_rule is not REQUIRED:
             # Mesh config is just mesh rule or hybrid mesh rule.
-            if type(mesh_rule) is HybridMeshShape or type(mesh_rule) is MeshShape:
+            if type(mesh_rule) is HybridMeshShape or type(mesh_rule) is tuple:
+                logging.info("Applying mesh rule %s", mesh_rule)
                 trainer_config.mesh_shape = mesh_rule
             elif type(mesh_rule) is AdvancedMeshRule:
                 if mesh_rule.mesh_shape is not None:

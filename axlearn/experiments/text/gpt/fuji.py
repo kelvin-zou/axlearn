@@ -87,6 +87,7 @@ TOTAL_TOKENS = {
         "test": 2 * (1024**4),  # 2T tokens
         "7B": 2 * (1024**4),  # 2T tokens
         "70B": 2 * (1024**4),  # 2T tokens
+        "405B": 15 * (1024**4),  # 15T tokens
     },
     Version.V3: {
         "test": 15 * (1024**4),  # 15T tokens
@@ -234,7 +235,7 @@ def get_trainer_kwargs(
                 ("tpu-v5litepod-256-b", mesh_shape_from_axes(data=-1, fsdp=16, model=16)),
             ),
         )
-        
+
     else:
         raise NotImplementedError(f"Unknown model size {model_size}.")
     model_kwargs = trainer_kwargs.pop("model_kwargs")
@@ -332,7 +333,7 @@ def trainer_configs(
         Version, MODEL_SIZES, [True, False]
     ):
         # 400B model is only available in V3.
-        if version!=Version.V3 and model_size=="405B":
+        if version == Version.V1 and model_size == "405B":
             continue
         vocab_size = VOCAB_SIZE[version]
         config_name = make_config_name(
