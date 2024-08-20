@@ -92,6 +92,7 @@ TOTAL_TOKENS = {
         "test": 15 * (1024**4),  # 15T tokens
         "7B": 15 * (1024**4),  # 15T tokens
         "70B": 15 * (1024**4),  # 15T tokens
+        "405B": 15 * (1024**4),  # 15T tokens
     },
 }
 
@@ -220,7 +221,7 @@ def get_trainer_kwargs(
                 rope_theta=rope_theta,
                 flash_attention=flash_attention,
             ),
-            learner_kwargs=dict(peak_lr=1.5e-4, weight_decay=0.1),
+            learner_kwargs=dict(peak_lr=8e-5, weight_decay=0.1),
             max_sequence_length=max_sequence_length,
             train_batch_size=256,
             logical_batch_size=32,
