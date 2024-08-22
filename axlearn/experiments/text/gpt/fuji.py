@@ -207,7 +207,9 @@ def get_trainer_kwargs(
             ),
             learner_kwargs=dict(peak_lr=1.5e-4, weight_decay=0.1),
             max_sequence_length=max_sequence_length,
-            train_batch_size=train_batch_size,
+            train_batch_size=4096,
+            logical_feed_indices=list(range(0, 1024)),
+            logical_batch_size=train_batch_size,
             max_step=max_step,
             mesh_shape=mesh_shape_from_axes(fsdp=-1),
             mesh_rules=(
@@ -215,13 +217,37 @@ def get_trainer_kwargs(
                 # with all activation offloading, HBM usage: 14GB/chip.
                 # TODO(kelvin-zou): Fix the env issue for internal use cases.
                 # tpu-v5e-256-4. step time: 14.3736s (59.87% MFU).
-                ("tpu-v5litepod-256-(4|8|16|32)", mesh_shape_from_axes(data=-1, fsdp=256)),
+                ("tpu-v5litepod-256-(4|8|16)", mesh_shape_from_axes(data=-1, fsdp=32, model=8)),
                 # H100/A100 80G. Maximum per-node batch size = 16, hence need >= 64 nodes.
                 # v2 on gpu-p5.48xlarge 8x64, step time: 12.9s.
                 (
                     "gpu-(p5.48xlarge|p4de.24xlarge)-(512|1024)",
                     mesh_shape_from_axes(data=-1, fsdp=128),
                 ),
+            ),
+        )
+    elif model_size == "405B":
+        trainer_kwargs = dict(
+            model_kwargs=dict(
+                num_layers=126,
+                hidden_dim=128 * 128,
+                num_heads=128,
+                num_kv_heads=8,
+                ffn_dim=scaled_hidden_dim(scale=3.25),
+                rope_theta=rope_theta,
+                flash_attention=flash_attention,
+            ),
+            learner_kwargs=dict(peak_lr=8e-5, weight_decay=0.1),
+            max_sequence_length=max_sequence_length,
+            train_batch_size=256,
+            logical_batch_size=32,
+            logical_feed_indices=list(range(0, 64, 64 // 32)),
+            max_step=max_step,
+            mesh_shape=mesh_shape_from_axes(fsdp=-1),
+            mesh_rules=(
+                # tpu-v5e. step time: TBD.
+                ("tpu-v5litepod-256", mesh_shape_from_axes(data=-1, fsdp=32, model=8)),
+                ("tpu-v5litepod-256-b", mesh_shape_from_axes(data=-1, fsdp=16, model=16)),
             ),
         )
     else:
