@@ -1107,5 +1107,5 @@ def select_mesh_config(trainer_config: SpmdTrainer.Config, *, mesh_selector: str
                         steps=mesh_rule.grad_accumulation,
                         metric_accumulator=MetricAccumulator.default_config(),
                     )
-                if mesh_rule.remat_rule is not None:
+                if mesh_rule.remat_policies is not None:
                     pass
