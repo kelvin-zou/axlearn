@@ -215,7 +215,7 @@ def get_trainer_kwargs(
                 # with all activation offloading, HBM usage: 14GB/chip.
                 # TODO(kelvin-zou): Fix the env issue for internal use cases.
                 # tpu-v5e-256-4. step time: 14.3736s (59.87% MFU).
-                ("tpu-v5litepod-256-4", mesh_shape_from_axes(data=-1, fsdp=256)),
+                ("tpu-v5litepod-256-(4|8|16|32)", mesh_shape_from_axes(data=-1, fsdp=256)),
                 # H100/A100 80G. Maximum per-node batch size = 16, hence need >= 64 nodes.
                 # v2 on gpu-p5.48xlarge 8x64, step time: 12.9s.
                 (
