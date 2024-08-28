@@ -100,8 +100,9 @@ class AdvancedMeshRule:
     configurations like the remat rule and gradient accumulation.
     """
 
+    world_size: Union[int, list[int]]
     mesh_shape: Optional[Union[MeshShape, HybridMeshShape]] = None
-    remat_policies: Optional[Optional[Callable[..., bool]]] = None
+    remat_policies: Optional[Dict[str, Optional[Callable[..., bool]]]] = None
     grad_accumulation: int = 1
 
 

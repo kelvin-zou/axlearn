@@ -31,7 +31,7 @@ from jax.experimental import multihost_utils
 from jax.experimental.pjit import pjit
 
 from axlearn.common import config, measurement, utils
-from axlearn.common.base_layer import ParameterSpec
+from axlearn.common.base_layer import ParameterSpec, RematSpec
 from axlearn.common.base_model import BaseModel
 from axlearn.common.checkpointer import BaseCheckpointer, Checkpointer
 from axlearn.common.config import (
@@ -1098,8 +1098,10 @@ def select_mesh_config(trainer_config: SpmdTrainer.Config, *, mesh_selector: str
                 logging.info("Applying mesh rule %s", mesh_rule)
                 trainer_config.mesh_shape = mesh_rule
             elif type(mesh_rule) is AdvancedMeshRule:
+                # Override mesh config with mesh rule.
                 if mesh_rule.mesh_shape is not None:
                     trainer_config.mesh_shape = mesh_rule.mesh_shape
+                # Apply grad accumulation.
                 if mesh_rule.grad_accumulation > 1:
                     trainer_config.learner.forward_fn_transformation = config.config_for_function(
                         with_minibatch_steps
@@ -1107,5 +1109,15 @@ def select_mesh_config(trainer_config: SpmdTrainer.Config, *, mesh_selector: str
                         steps=mesh_rule.grad_accumulation,
                         metric_accumulator=MetricAccumulator.default_config(),
                     )
+                # Apply remat policies.
                 if mesh_rule.remat_policies is not None:
-                    pass
+                    for module_name, module_remat_policy in mesh_rule.remat_policies.items():
+                        if not hasattr(trainer_config.model, module_name):
+                            raise ValueError(
+                                f"Module {module_name} not found in the model config {trainer_config.model}."
+                            )
+                        module = getattr(trainer_config.model, module_name)
+                        module.remat_spec = RematSpec(
+                            prevent_cse=True,
+                            policy=module_remat_policy,
+                        )

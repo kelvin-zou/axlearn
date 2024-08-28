@@ -166,18 +166,22 @@ def get_trainer_kwargs(
                 # v1 on gpu-p5.48xlarge-512 (512 chips):    1.54s
                 #
                 # tpu-v4-(1024|2048).
-                ("tpu-v4-.*", mesh_shape_from_axes(data=-1, fsdp=16)),
+                ("tpu-v4-1024", mesh_shape_from_axes(data=-1, fsdp=16)),
                 # tpu-v5e.
                 (
                     "tpu-v5litepod-256",
                     AdvancedMeshRule(
-                        mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256), grad_accumulation=4
+                        world_size=256,
+                        mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
+                        grad_accumulation=4,
                     ),
                 ),
                 (
                     "tpu-v5litepod-256-2",
                     AdvancedMeshRule(
-                        mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256), grad_accumulation=2
+                        world_size=512,
+                        mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
+                        grad_accumulation=2,
                     ),
                 ),
                 # v2 on tpu-v5litepod-256x4: 1.87s (46% MFU), HBM usage: 11GB/chip.
@@ -202,14 +206,13 @@ def get_trainer_kwargs(
                 num_heads=64,
                 # No GQA support in V1 models, so num_kv_heads is the same as num_heads.
                 num_kv_heads=None if version == Version.V1 else 8,
+                ffn_dim=scaled_hidden_dim(scale=3.5),
                 rope_theta=rope_theta,
                 flash_attention=flash_attention,
             ),
             learner_kwargs=dict(peak_lr=1.5e-4, weight_decay=0.1),
             max_sequence_length=max_sequence_length,
-            train_batch_size=4096,
-            logical_feed_indices=list(range(0, 1024)),
-            logical_batch_size=train_batch_size,
+            train_batch_size=train_batch_size,
             max_step=max_step,
             mesh_shape=mesh_shape_from_axes(fsdp=-1),
             mesh_rules=(
@@ -217,7 +220,23 @@ def get_trainer_kwargs(
                 # with all activation offloading, HBM usage: 14GB/chip.
                 # TODO(kelvin-zou): Fix the env issue for internal use cases.
                 # tpu-v5e-256-4. step time: 14.3736s (59.87% MFU).
-                ("tpu-v5litepod-256-(4|8|16)", mesh_shape_from_axes(data=-1, fsdp=32, model=8)),
+                ("tpu-v5litepod-256-4", mesh_shape_from_axes(data=-1, fsdp=256)),
+                (
+                    "tpu-v5litepod-256",
+                    AdvancedMeshRule(
+                        world_size=256,
+                        mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
+                        grad_accumulation=4,
+                    ),
+                ),
+                (
+                    "tpu-v5litepod-256-2",
+                    AdvancedMeshRule(
+                        world_size=512,
+                        mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
+                        grad_accumulation=2,
+                    ),
+                ),
                 # H100/A100 80G. Maximum per-node batch size = 16, hence need >= 64 nodes.
                 # v2 on gpu-p5.48xlarge 8x64, step time: 12.9s.
                 (
@@ -240,14 +259,13 @@ def get_trainer_kwargs(
             learner_kwargs=dict(peak_lr=8e-5, weight_decay=0.1),
             max_sequence_length=max_sequence_length,
             train_batch_size=256,
-            logical_batch_size=32,
-            logical_feed_indices=list(range(0, 64, 64 // 32)),
+            # logical_batch_size=32,
+            # logical_feed_indices=list(range(0, 64, 64 // 32)),
             max_step=max_step,
             mesh_shape=mesh_shape_from_axes(fsdp=-1),
             mesh_rules=(
                 # tpu-v5e. step time: TBD.
-                ("tpu-v5litepod-256", mesh_shape_from_axes(data=-1, fsdp=32, model=8)),
-                ("tpu-v5litepod-256-b", mesh_shape_from_axes(data=-1, fsdp=16, model=16)),
+                ("tpu-v5p-*", mesh_shape_from_axes(data=-1, fsdp=16, model=8)),
             ),
         )
     else:
@@ -416,34 +434,9 @@ def trainer_configs(
                     evaler.input.batcher.global_batch_size //= 32
                 return cfg
 
-            def make_grad_accum_config(
-                config_func: Callable, gradient_accumulation_steps: int
-            ) -> SpmdTrainer.Config:
-                """Make gradient accumulation config from the base config.
-
-                Args:
-                    config_func: A function that returns a trainer config.
-                    grad_accum_steps: Number of gradient accumulation steps
-
-                Returns:
-                    A trainer config that enables gradient accumulation.
-                """
-                cfg: SpmdTrainer.Config = config_func()
-                cfg.learner.forward_fn_transformation = config.config_for_function(
-                    with_minibatch_steps
-                ).set(
-                    steps=gradient_accumulation_steps,
-                    metric_accumulator=MetricAccumulator.default_config(),
-                )
-                return cfg
-
             # Make single-host config
             make_single_host_config_func = functools.partial(make_single_host_config, config_name)
             config_map[f"{config_name}-single-host"] = make_single_host_config_func
-            # Make single-host-grad-accum config.
-            config_map[f"{config_name}-grad-accum-single-host"] = functools.partial(
-                make_grad_accum_config, make_single_host_config_func, 4
-            )
 
         if model_size == "70B" or model_size == "405B":
 

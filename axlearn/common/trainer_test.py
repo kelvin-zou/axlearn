@@ -23,6 +23,7 @@ from jax import numpy as jnp
 from jax.experimental import checkify
 
 from axlearn.common import (
+    config,
     debug_utils,
     layers,
     learner,
@@ -42,11 +43,14 @@ from axlearn.common.checkpointer import (
 from axlearn.common.config import REQUIRED, Required, config_class, config_for_function
 from axlearn.common.evaler import SpmdEvaler
 from axlearn.common.evaler import every_n_steps_policy as eval_every_n_steps_policy
+from axlearn.common.gradient_accumulation import with_minibatch_steps
 from axlearn.common.learner import UpdateType, should_update_with_optimizers
+from axlearn.common.metrics import MetricAccumulator
 from axlearn.common.module import Module
 from axlearn.common.state_builder import Builder as TrainerStateBuilder
 from axlearn.common.trainer import SpmdTrainer, TrainerState, select_mesh_config
 from axlearn.common.utils import (
+    AdvancedMeshRule,
     Nested,
     NestedTensor,
     Tensor,
@@ -923,6 +927,66 @@ class SelectMeshConfigTest(test_utils.TestCase):
         self.assertEqual(cfg.mesh_shape, (4, 1, 8, 1))
         select_mesh_config(cfg, mesh_selector="gpu-p4d.24xlarge-128")
         self.assertIsNone(cfg.mesh_shape)
+
+
+class SelectAdvancedMeshConfigTest(test_utils.TestCase):
+    def test_select_mesh_config(self):
+        cfg = SpmdTrainer.default_config().set(
+            model=DummyModel.default_config().set(
+                dtype=jnp.float32, param_init=param_init.DefaultInitializer.default_config()
+            )
+        )
+        self.assertIs(cfg.mesh_shape, REQUIRED)
+
+        # When mesh_rules=None.
+        self.assertIsNone(cfg.mesh_rules)
+        select_mesh_config(cfg, mesh_selector="tpu-v4-128")
+        # cfg.mesh_shape remains unchanged.
+        self.assertIs(cfg.mesh_shape, REQUIRED)
+
+        # When no mesh rule matches the selector.
+        cfg.mesh_rules = (
+            (
+                "tpu-v4-64",
+                AdvancedMeshRule(world_size=32, mesh_shape=(4, 1, 8, 1), grad_accumulation=4),
+            ),
+        )
+        select_mesh_config(cfg, mesh_selector="tpu-v4-128")
+        # cfg.mesh_shape still remains unchanged.
+        self.assertIs(cfg.mesh_shape, REQUIRED)
+
+        # When there is a match.
+        select_mesh_config(cfg, mesh_selector="tpu-v4-64")
+        # cfg.mesh_shape is overridden.
+        self.assertEqual(cfg.mesh_shape, (4, 1, 8, 1))
+        # Check if gradient accumulation is set up.
+        self.assertRegex(str(cfg.learner.forward_fn_transformation), "steps: 4")
+
+        # When there is a match.
+        cfg.mesh_rules = (
+            (
+                "gpu-(p5.48xlarge|p4de.24xlarge)-32",
+                AdvancedMeshRule(
+                    world_size=32,
+                    mesh_shape=(4, 1, 8, 1),
+                    grad_accumulation=4,
+                    remat_policies={"x.y.z": jax.ad_checkpoint.checkpoint_policies.dots_saveable},
+                ),
+            ),
+            ("gpu-(p5.48xlarge|p4de.24xlarge)-64", AdvancedMeshRule(
+                    world_size=32,
+                    mesh_shape=(4, 1, 8, 1),
+                    grad_accumulation=4,
+                    remat_policies={"fc.linear": jax.ad_checkpoint.checkpoint_policies.dots_saveable},
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "Module x.y.z not found in the model config"):
+            select_mesh_config(cfg, mesh_selector="gpu-p5.48xlarge-32")
+        self.assertEqual(cfg.mesh_shape, (4, 1, 8, 1))
+        select_mesh_config(cfg, mesh_selector="gpu-p5.48xlarge-64")
+        # select_mesh_config(cfg, mesh_selector="gpu-p4d.24xlarge-128")
+        # self.assertIsNone(cfg.mesh_shape)
 
 
 class CompatibilityTest(test_utils.TestCase):
