@@ -15,6 +15,8 @@ import functools
 import itertools
 from typing import Any, Callable, Dict, Optional, Union
 
+from jax.ad_checkpoint import checkpoint_policies as jax_remat_policies
+
 from axlearn.common import causal_lm, config
 from axlearn.common.attention import (
     BaseStackedTransformerLayer,
@@ -25,8 +27,8 @@ from axlearn.common.attention import (
     RepeatedTransformerLayer,
     RoFormerQKVLinear,
 )
-from axlearn.common.config import config_for_function
 from axlearn.common.base_layer import RematSpec
+from axlearn.common.config import config_for_function
 from axlearn.common.embedding import TransformerTextEmbeddings
 from axlearn.common.gradient_accumulation import with_minibatch_steps
 from axlearn.common.layers import RMSNorm
@@ -187,7 +189,14 @@ def get_trainer_kwargs(
                     ),
                 ),
                 # v2 on tpu-v5litepod-256x4: 1.87s (46% MFU), HBM usage: 11GB/chip.
-                ("tpu-v5litepod-256-4", mesh_shape_from_axes(data=-1, fsdp=256)),
+                (
+                    "tpu-v5litepod-256-4",
+                    AdvancedMeshRule(
+                        world_size=1024,
+                        mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
+                        remat_policy=jax_remat_policies.dots_saveable,
+                    ),
+                ),
                 # tpu-v5p.
                 ("tpu-v5p-.*", mesh_shape_from_axes(data=-1, fsdp=8)),
                 # H100/A100 80G.
@@ -222,13 +231,21 @@ def get_trainer_kwargs(
                 # with all activation offloading, HBM usage: 14GB/chip.
                 # TODO(kelvin-zou): Fix the env issue for internal use cases.
                 # tpu-v5e-256-4. step time: 14.3736s (59.87% MFU).
-                ("tpu-v5litepod-256-4", mesh_shape_from_axes(data=-1, fsdp=256)),
+                (
+                    "tpu-v5litepod-256-4",
+                    AdvancedMeshRule(
+                        world_size=1024,
+                        mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
+                        # remat_policy=offload_dots_saveble,
+                    ),
+                ),
                 (
                     "tpu-v5litepod-256",
                     AdvancedMeshRule(
                         world_size=256,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
                         grad_accumulation=4,
+                        # remat_policy=offload_dots_saveble,
                     ),
                 ),
                 (
@@ -237,6 +254,7 @@ def get_trainer_kwargs(
                         world_size=512,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
                         grad_accumulation=2,
+                        # remat_policy=offload_dots_saveble,
                     ),
                 ),
                 # H100/A100 80G. Maximum per-node batch size = 16, hence need >= 64 nodes.
@@ -440,7 +458,7 @@ def trainer_configs(
             make_single_host_config_func = functools.partial(make_single_host_config, config_name)
             config_map[f"{config_name}-single-host"] = make_single_host_config_func
 
-        if model_size == "70B" or model_size == "405B":
+        if model_size in ("7B", "70B", "405B"):
 
             def make_config_with_act_offload(base_config_name: str) -> SpmdTrainer.Config:
                 """Make configs for the v5e/v6e tpu with low HBM."""
@@ -449,9 +467,7 @@ def trainer_configs(
                 # pytype: enable=annotation-type-mismatch
                 cfg.model.decoder.transformer.layer.remat_spec = RematSpec(
                     prevent_cse=True,
-                    policy=config_for_function(offload_dots_saveble).set(
-                        offload_src="device", offload_dst="pinned_host"
-                    ),
+                    policy=offload_dots_saveble,
                 )
                 # update_model_remat_config(
                 #     stack_cfg=cfg.model.decoder.transformer,

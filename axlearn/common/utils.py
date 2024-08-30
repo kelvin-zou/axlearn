@@ -95,14 +95,16 @@ class HybridMeshShape:
         return len(self.ici_mesh_shape)
 
 
-def offload_dots_saveble(*, offload_src, offload_dst):
+def offload_dots_saveble(*, offload_src="device", offload_dst="pinned_host"):
     """Extract and combine the policy from save_and_offload_only_these_names and dots_saveable.
-    This would remove the need to match the activation names.
+    https://github.com/google/jax/blob/e3110c18f8bce83901cff42458d4204df9e3abeb/jax/_src/ad_checkpoint.py#L151
+    This would remove the need to match the names for activation tensors.
 
     Args:
         offload_src (str): the source device for offloading.
         offload_dst (str): the target device for offloading.
     """
+
     def policy(prim, *_, **params):
         if prim in {lax_internal.dot_general_p, lax_convolution.conv_general_dilated_p}:
             return pe.Offloadable(src=offload_src, dst=offload_dst)
