@@ -20,6 +20,7 @@ import re
 import sys
 import threading
 import traceback
+import types
 from enum import Enum
 from typing import (
     Any,
@@ -95,7 +96,7 @@ class HybridMeshShape:
         return len(self.ici_mesh_shape)
 
 
-def offload_dots_saveble(*, offload_src="device", offload_dst="pinned_host"):
+def offload_dots_saveble(offload_src, offload_dst):
     """Extract and combine the policy from save_and_offload_only_these_names and dots_saveable.
     https://github.com/google/jax/blob/e3110c18f8bce83901cff42458d4204df9e3abeb/jax/_src/ad_checkpoint.py#L151
     This would remove the need to match the names for activation tensors.
@@ -106,12 +107,14 @@ def offload_dots_saveble(*, offload_src="device", offload_dst="pinned_host"):
     """
 
     def policy(prim, *_, **params):
-        if prim in {lax_internal.dot_general_p, lax_convolution.conv_general_dilated_p}:
+        if prim is lax_internal.dot_general_p:
             return pe.Offloadable(src=offload_src, dst=offload_dst)
-        else:
-            return pe.Recompute
+        return pe.Recompute
 
     return policy
+
+
+extended_checkpoint_policies = types.SimpleNamespace(offload_dots_saveble=offload_dots_saveble)
 
 
 @dataclasses.dataclass
@@ -122,6 +125,7 @@ class AdvancedMeshRule:
     configurations like the remat rule and gradient accumulation.
     """
 
+    # World size will be used for auto-configure data sharding in the future.
     world_size: Union[int, list[int]]
     mesh_shape: Optional[Union[MeshShape, HybridMeshShape]] = None
     # TODO(kelvin-zou): At the moment we capture the whole remat policy,

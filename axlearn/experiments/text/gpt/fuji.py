@@ -34,7 +34,7 @@ from axlearn.common.gradient_accumulation import with_minibatch_steps
 from axlearn.common.layers import RMSNorm
 from axlearn.common.metrics import MetricAccumulator
 from axlearn.common.trainer import SpmdTrainer
-from axlearn.common.utils import AdvancedMeshRule, offload_dots_saveble
+from axlearn.common.utils import AdvancedMeshRule, extended_checkpoint_policies
 from axlearn.experiments.text.gpt.common import (
     STEP_DTYPE,
     SourceBuilder,
@@ -153,6 +153,7 @@ def get_trainer_kwargs(
                 hidden_dim=128 * 32,
                 num_heads=32,
                 num_kv_heads=num_kv_heads,
+                ffn_dim=scaled_hidden_dim(scale=3.5),
                 rope_theta=rope_theta,
                 flash_attention=flash_attention,
             ),
@@ -467,7 +468,9 @@ def trainer_configs(
                 # pytype: enable=annotation-type-mismatch
                 cfg.model.decoder.transformer.layer.remat_spec = RematSpec(
                     prevent_cse=True,
-                    policy=offload_dots_saveble,
+                    policy=config_for_function(
+                        extended_checkpoint_policies.offload_dots_saveble
+                    ).set(offload_src="device", offload_dst="pinned_host"),
                 )
                 # update_model_remat_config(
                 #     stack_cfg=cfg.model.decoder.transformer,
