@@ -1094,7 +1094,7 @@ def select_mesh_config(trainer_config: SpmdTrainer.Config, *, mesh_selector: str
         logging.info("Mesh selector %s matches mesh rule %s", mesh_selector, mesh_rule)
         if mesh_rule is not REQUIRED:
             # Mesh config is just mesh rule or hybrid mesh rule.
-            if type(mesh_rule) is HybridMeshShape or type(mesh_rule) is tuple:
+            if type(mesh_rule) is HybridMeshShape or type(mesh_rule) is tuple or mesh_rule is None:
                 logging.info("Applying mesh rule %s", mesh_rule)
                 trainer_config.mesh_shape = mesh_rule
             elif type(mesh_rule) is AdvancedMeshRule:
@@ -1110,14 +1110,15 @@ def select_mesh_config(trainer_config: SpmdTrainer.Config, *, mesh_selector: str
                         metric_accumulator=MetricAccumulator.default_config(),
                     )
                 # Apply remat policies.
-                if mesh_rule.remat_policies is not None:
-                    for module_name, module_remat_policy in mesh_rule.remat_policies.items():
-                        if not hasattr(trainer_config.model, module_name):
-                            raise ValueError(
-                                f"Module {module_name} not found in the model config {trainer_config.model}."
-                            )
-                        module = getattr(trainer_config.model, module_name)
-                        module.remat_spec = RematSpec(
-                            prevent_cse=True,
-                            policy=module_remat_policy,
-                        )
+                if mesh_rule.remat_policy is not None:
+                    # Apply each remat policy to the corresponding module.
+                    # Currently only  "*" is supported to apply to all modules.
+                    def apply_remat_policy(module, remat_policy=mesh_rule.remat_policy):
+                        if hasattr(module, "remat_spec"):
+                            module.set(remat_spec=RematSpec(prevent_cse=True, policy=remat_policy))
+                        return module
+
+                    trainer_config.model = jax.tree_util.tree_map(
+                        apply_remat_policy,
+                        trainer_config.model,
+                    )

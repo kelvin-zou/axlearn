@@ -40,7 +40,13 @@ from axlearn.common.checkpointer import (
     every_n_steps_and_last_policy,
     every_n_steps_policy,
 )
-from axlearn.common.config import REQUIRED, Required, config_class, config_for_function
+from axlearn.common.config import (
+    REQUIRED,
+    InstantiableConfig,
+    Required,
+    config_class,
+    config_for_function,
+)
 from axlearn.common.evaler import SpmdEvaler
 from axlearn.common.evaler import every_n_steps_policy as eval_every_n_steps_policy
 from axlearn.common.gradient_accumulation import with_minibatch_steps
@@ -970,23 +976,19 @@ class SelectAdvancedMeshConfigTest(test_utils.TestCase):
                     world_size=32,
                     mesh_shape=(4, 1, 8, 1),
                     grad_accumulation=4,
-                    remat_policies={"x.y.z": jax.ad_checkpoint.checkpoint_policies.dots_saveable},
+                    remat_policy=jax.ad_checkpoint.checkpoint_policies.dots_saveable,
                 ),
             ),
-            ("gpu-(p5.48xlarge|p4de.24xlarge)-64", AdvancedMeshRule(
-                    world_size=32,
-                    mesh_shape=(4, 1, 8, 1),
-                    grad_accumulation=4,
-                    remat_policies={"fc.linear": jax.ad_checkpoint.checkpoint_policies.dots_saveable},
-                ),
-            ),
+            ("gpu-(p5.48xlarge|p4de.24xlarge)-64", None),
         )
-        with self.assertRaisesRegex(ValueError, "Module x.y.z not found in the model config"):
-            select_mesh_config(cfg, mesh_selector="gpu-p5.48xlarge-32")
+
+        select_mesh_config(cfg, mesh_selector="gpu-p5.48xlarge-32")
         self.assertEqual(cfg.mesh_shape, (4, 1, 8, 1))
+        logging.error(cfg.model.linear)
+        self.assertRegex(str(cfg.model.linear), "dots_saveable")
+
         select_mesh_config(cfg, mesh_selector="gpu-p5.48xlarge-64")
-        # select_mesh_config(cfg, mesh_selector="gpu-p4d.24xlarge-128")
-        # self.assertIsNone(cfg.mesh_shape)
+        self.assertIsNone(cfg.mesh_shape)
 
 
 class CompatibilityTest(test_utils.TestCase):

@@ -25,12 +25,14 @@ from axlearn.common.attention import (
     RepeatedTransformerLayer,
     RoFormerQKVLinear,
 )
+from axlearn.common.config import config_for_function
+from axlearn.common.base_layer import RematSpec
 from axlearn.common.embedding import TransformerTextEmbeddings
 from axlearn.common.gradient_accumulation import with_minibatch_steps
 from axlearn.common.layers import RMSNorm
 from axlearn.common.metrics import MetricAccumulator
 from axlearn.common.trainer import SpmdTrainer
-from axlearn.common.utils import AdvancedMeshRule
+from axlearn.common.utils import AdvancedMeshRule, offload_dots_saveble
 from axlearn.experiments.text.gpt.common import (
     STEP_DTYPE,
     SourceBuilder,
@@ -445,11 +447,17 @@ def trainer_configs(
                 # pytype: disable=annotation-type-mismatch
                 cfg: SpmdTrainer.Config = config_map[base_config_name]().clone()
                 # pytype: enable=annotation-type-mismatch
-                update_model_remat_config(
-                    stack_cfg=cfg.model.decoder.transformer,
-                    layer_cfg=cfg.model.decoder.transformer.layer,
-                    offload_dst="pinned_host",
+                cfg.model.decoder.transformer.layer.remat_spec = RematSpec(
+                    prevent_cse=True,
+                    policy=config_for_function(offload_dots_saveble).set(
+                        offload_src="device", offload_dst="pinned_host"
+                    ),
                 )
+                # update_model_remat_config(
+                #     stack_cfg=cfg.model.decoder.transformer,
+                #     layer_cfg=cfg.model.decoder.transformer.layer,
+                #     offload_dst="pinned_host",
+                # )
                 return cfg
 
             make_litepod_config_func = functools.partial(make_config_with_act_offload, config_name)

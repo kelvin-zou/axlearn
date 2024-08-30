@@ -39,6 +39,9 @@ import jax
 import numpy as np
 from absl import logging
 from jax import numpy as jnp
+from jax._src.interpreters import partial_eval as pe
+from jax._src.lax import convolution as lax_convolution
+from jax._src.lax import lax as lax_internal
 from jax._src.tree_util import KeyEntry, KeyPath
 from jax.experimental import maps, mesh_utils, multihost_utils
 from jax.sharding import PartitionSpec
@@ -92,6 +95,23 @@ class HybridMeshShape:
         return len(self.ici_mesh_shape)
 
 
+def offload_dots_saveble(*, offload_src, offload_dst):
+    """Extract and combine the policy from save_and_offload_only_these_names and dots_saveable.
+    This would remove the need to match the activation names.
+
+    Args:
+        offload_src (str): the source device for offloading.
+        offload_dst (str): the target device for offloading.
+    """
+    def policy(prim, *_, **params):
+        if prim in {lax_internal.dot_general_p, lax_convolution.conv_general_dilated_p}:
+            return pe.Offloadable(src=offload_src, dst=offload_dst)
+        else:
+            return pe.Recompute
+
+    return policy
+
+
 @dataclasses.dataclass
 class AdvancedMeshRule:
     """A rule for advanced mesh configuration.
@@ -102,7 +122,9 @@ class AdvancedMeshRule:
 
     world_size: Union[int, list[int]]
     mesh_shape: Optional[Union[MeshShape, HybridMeshShape]] = None
-    remat_policies: Optional[Dict[str, Optional[Callable[..., bool]]]] = None
+    # TODO(kelvin-zou): At the moment we capture the whole remat policy,
+    # but we may want to split into a dict for different substructure in the future.
+    remat_policy: Optional[Callable[..., bool]] = None
     grad_accumulation: int = 1
 
 
