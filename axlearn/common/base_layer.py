@@ -16,16 +16,9 @@ from axlearn.common.config import ConfigOr, Configurable, config_class, maybe_in
 from axlearn.common.metrics import WeightedScalar
 from axlearn.common.module import Module, child_context, current_context, new_output_collection
 from axlearn.common.param_init import DefaultInitializer, FanAxes
-from axlearn.common.utils import (
-    Nested,
-    NestedTensor,
-    PartitionSpec,
-    Tensor,
-    TensorSpec,
-    check_jax_type,
-    flatten_items,
-    get_or_none,
-)
+from axlearn.common.utils import Nested, NestedTensor, PartitionSpec
+from axlearn.common.utils import RematSpec as BaseRematSpec
+from axlearn.common.utils import Tensor, TensorSpec, check_jax_type, flatten_items, get_or_none
 
 
 @dataclasses.dataclass
@@ -107,17 +100,8 @@ class ParameterSpec(TensorSpec):
 
 # For new code, use Nested[ParameterSpec].
 NestedParameterSpec = Optional[Union[ParameterSpec, Dict[str, Any]]]
-
-
-@dataclasses.dataclass
-class RematSpec:
-    """RematSpec captures the configurable arguments for 'jax.remat'.
-
-    https://github.com/google/jax/blob/1b79caa/jax/_src/ad_checkpoint.py#L99
-    """
-
-    prevent_cse: bool = True
-    policy: Optional[ConfigOr[Callable[..., bool]]] = None
+# Lift RematSpec from common.utils to avoid circular imports.
+RematSpec = BaseRematSpec
 
 
 class ParameterNoise(Configurable):

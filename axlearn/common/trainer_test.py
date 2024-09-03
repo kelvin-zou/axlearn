@@ -61,6 +61,7 @@ from axlearn.common.utils import (
     AdvancedMeshRule,
     Nested,
     NestedTensor,
+    RematSpec,
     Tensor,
     as_tensor,
     dispatch_input_batch,
@@ -976,7 +977,10 @@ class SelectAdvancedMeshConfigTest(test_utils.TestCase):
                     mesh_shape=(4, 1, 8, 1),
                     grad_accumulation=4,
                     remat_policy={
-                        "model.linear": jax.ad_checkpoint.checkpoint_policies.dots_saveable
+                        "model.linear": RematSpec(
+                            prevent_cse=True,
+                            policy=jax.ad_checkpoint.checkpoint_policies.dots_saveable,
+                        ),
                     },
                 ),
             ),
@@ -988,7 +992,10 @@ class SelectAdvancedMeshConfigTest(test_utils.TestCase):
                     mesh_shape=(4, 1, 8, 1),
                     grad_accumulation=1,
                     remat_policy={
-                        "model.unknown": jax.ad_checkpoint.checkpoint_policies.dots_saveable
+                        "model.unknown": RematSpec(
+                            prevent_cse=True,
+                            policy=jax.ad_checkpoint.checkpoint_policies.dots_saveable,
+                        ),
                     },
                 ),
             ),

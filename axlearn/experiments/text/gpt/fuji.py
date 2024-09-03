@@ -32,7 +32,6 @@ from axlearn.common.config import config_for_function
 from axlearn.common.embedding import TransformerTextEmbeddings
 from axlearn.common.gradient_accumulation import with_minibatch_steps
 from axlearn.common.layers import RMSNorm
-from axlearn.common.metrics import MetricAccumulator
 from axlearn.common.trainer import SpmdTrainer
 from axlearn.common.utils import AdvancedMeshRule, extended_checkpoint_policies
 from axlearn.experiments.text.gpt.common import (
@@ -181,7 +180,9 @@ def get_trainer_kwargs(
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
                         grad_accumulation=4,
                         remat_policy={
-                            "model.decoder.transformer.layer": jax_remat_policies.dots_saveable
+                            "model.decoder.transformer.layer": RematSpec(
+                                prevent_cse=True, policy=offload_saveable_policy
+                            ),
                         },
                     ),
                 ),
@@ -192,7 +193,9 @@ def get_trainer_kwargs(
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
                         grad_accumulation=2,
                         remat_policy={
-                            "model.decoder.transformer.layer": jax_remat_policies.dots_saveable
+                            "model.decoder.transformer.layer": RematSpec(
+                                prevent_cse=True, policy=offload_saveable_policy
+                            ),
                         },
                     ),
                 ),
@@ -203,7 +206,9 @@ def get_trainer_kwargs(
                         world_size=1024,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
                         remat_policy={
-                            "model.decoder.transformer.layer": jax_remat_policies.dots_saveable
+                            "model.decoder.transformer.layer": RematSpec(
+                                prevent_cse=True, policy=offload_saveable_policy
+                            ),
                         },
                     ),
                 ),
@@ -246,7 +251,11 @@ def get_trainer_kwargs(
                     AdvancedMeshRule(
                         world_size=1024,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
-                        remat_policy={"model.decoder.transformer.layer": offload_saveable_policy},
+                        remat_policy={
+                            "model.decoder.transformer.layer": RematSpec(
+                                prevent_cse=True, policy=offload_saveable_policy
+                            ),
+                        },
                     ),
                 ),
                 (
@@ -255,7 +264,11 @@ def get_trainer_kwargs(
                         world_size=256,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
                         grad_accumulation=4,
-                        remat_policy={"model.decoder.transformer.layer": offload_saveable_policy},
+                        remat_policy={
+                            "model.decoder.transformer.layer": RematSpec(
+                                prevent_cse=True, policy=offload_saveable_policy
+                            ),
+                        },
                     ),
                 ),
                 (
@@ -264,7 +277,11 @@ def get_trainer_kwargs(
                         world_size=512,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
                         grad_accumulation=2,
-                        remat_policy={"model.decoder.transformer.layer": offload_saveable_policy},
+                        remat_policy={
+                            "model.decoder.transformer.layer": RematSpec(
+                                prevent_cse=True, policy=offload_saveable_policy
+                            ),
+                        },
                     ),
                 ),
                 # H100/A100 80G. Maximum per-node batch size = 16, hence need >= 64 nodes.

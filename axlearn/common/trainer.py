@@ -1112,13 +1112,13 @@ def select_mesh_config(trainer_config: SpmdTrainer.Config, *, mesh_selector: str
                 if mesh_rule.remat_policy is not None:
                     # Apply each remat policy to the corresponding module.
                     curr_module = trainer_config
-                    for module_name, remat_policy in mesh_rule.remat_policy.items():
+                    for module_name, remat_spec in mesh_rule.remat_policy.items():
                         # Here we assume x.y.z format.
-                        # One example would be decoder.transformer.layer
+                        # One example would be model.decoder.transformer.layer.
                         target_modules = module_name.split(".")
                         for target_module in target_modules:
                             if not hasattr(curr_module, target_module):
                                 raise ValueError(f"{target_module} is not found in {curr_module}.")
                             curr_module = getattr(curr_module, target_module)
                         # Here we assume all modules have remat_spec attribute.
-                        curr_module.remat_spec = RematSpec(prevent_cse=True, policy=remat_policy)
+                        curr_module.remat_spec = remat_spec

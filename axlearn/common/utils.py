@@ -48,7 +48,7 @@ from jax.experimental import maps, mesh_utils, multihost_utils
 from jax.sharding import PartitionSpec
 
 from axlearn.common import serialization
-from axlearn.common.config import is_named_tuple
+from axlearn.common.config import ConfigOr, is_named_tuple
 
 # New code should use Nested[XX] instead of NestedXX.
 # Old definitions are provided for backwards compatibility.
@@ -69,6 +69,17 @@ _enable_xla_runtime_errors = False
 
 # The set of supported floating point dtypes.
 _supported_float_dtypes = [jnp.bfloat16, jnp.float32]
+
+
+@dataclasses.dataclass
+class RematSpec:
+    """RematSpec captures the configurable arguments for 'jax.remat'.
+
+    https://github.com/google/jax/blob/1b79caa/jax/_src/ad_checkpoint.py#L99
+    """
+
+    prevent_cse: bool = True
+    policy: Optional[ConfigOr[Callable[..., bool]]] = None
 
 
 @dataclasses.dataclass
@@ -128,9 +139,10 @@ class AdvancedMeshRule:
     # World size will be used for auto-configure data sharding in the future.
     world_size: Union[int, list[int]]
     mesh_shape: Optional[Union[MeshShape, HybridMeshShape]] = None
-    # TODO(kelvin-zou): At the moment we capture the whole remat policy,
-    # but we may want to split into a dict for different substructure in the future.
-    remat_policy: Optional[Dict[str, Optional[Callable[..., bool]]]] = None
+    # NOTE(kelvin-zou): please be careful when use *only_these_names policies,
+    # the module's names may change during module config override later on.
+    # Use dots_saveable and offload_dots_saveble when possible.
+    remat_policy: Optional[Dict[str, Optional[RematSpec]]] = None
     grad_accumulation: int = 1
 
 
