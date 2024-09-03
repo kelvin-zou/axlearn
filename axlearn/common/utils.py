@@ -130,7 +130,7 @@ class AdvancedMeshRule:
     mesh_shape: Optional[Union[MeshShape, HybridMeshShape]] = None
     # TODO(kelvin-zou): At the moment we capture the whole remat policy,
     # but we may want to split into a dict for different substructure in the future.
-    remat_policy: Optional[Callable[..., bool]] = None
+    remat_policy: Optional[Dict[str, Optional[Callable[..., bool]]]] = None
     grad_accumulation: int = 1
 
 

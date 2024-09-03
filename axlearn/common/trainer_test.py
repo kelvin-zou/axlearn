@@ -23,6 +23,7 @@ from jax import numpy as jnp
 from jax.experimental import checkify
 
 from axlearn.common import (
+    causal_lm,
     config,
     debug_utils,
     layers,
@@ -32,6 +33,7 @@ from axlearn.common import (
     struct_test,
     test_utils,
 )
+from axlearn.common.attention import StackedTransformerLayer
 from axlearn.common.base_layer import NestedParameterSpec, ParameterSpec
 from axlearn.common.base_model import BaseModel
 from axlearn.common.checkpointer import (
@@ -183,13 +185,14 @@ class DummyModel(BaseModel):
 
         # Whether to explicitly init dummy state to test pruning backwards compat.
         init_dummy_state: bool = False
+        linear: layers.Linear.Config = layers.Linear.default_config()
 
     def __init__(self, cfg: Config, *, parent: Optional[Module]):
         super().__init__(cfg, parent=parent)
         cfg = self.config
         self._add_child(
             "fc",
-            layers.Linear.default_config().set(
+            cfg.linear.set(
                 input_dim=3,
                 output_dim=NUM_CLASSES,
                 bias=True,
@@ -937,11 +940,7 @@ class SelectMeshConfigTest(test_utils.TestCase):
 
 class SelectAdvancedMeshConfigTest(test_utils.TestCase):
     def test_select_mesh_config(self):
-        cfg = SpmdTrainer.default_config().set(
-            model=DummyModel.default_config().set(
-                dtype=jnp.float32, param_init=param_init.DefaultInitializer.default_config()
-            )
-        )
+        cfg = SpmdTrainer.default_config().set(model=DummyModel.default_config())
         self.assertIs(cfg.mesh_shape, REQUIRED)
 
         # When mesh_rules=None.
@@ -976,17 +975,30 @@ class SelectAdvancedMeshConfigTest(test_utils.TestCase):
                     world_size=32,
                     mesh_shape=(4, 1, 8, 1),
                     grad_accumulation=4,
-                    remat_policy=jax.ad_checkpoint.checkpoint_policies.dots_saveable,
+                    remat_policy={
+                        "model.linear": jax.ad_checkpoint.checkpoint_policies.dots_saveable
+                    },
                 ),
             ),
             ("gpu-(p5.48xlarge|p4de.24xlarge)-64", None),
+            (
+                "gpu-(p5.48xlarge|p4de.24xlarge)-128",
+                AdvancedMeshRule(
+                    world_size=128,
+                    mesh_shape=(4, 1, 8, 1),
+                    grad_accumulation=1,
+                    remat_policy={
+                        "model.unknown": jax.ad_checkpoint.checkpoint_policies.dots_saveable
+                    },
+                ),
+            ),
         )
 
         select_mesh_config(cfg, mesh_selector="gpu-p5.48xlarge-32")
         self.assertEqual(cfg.mesh_shape, (4, 1, 8, 1))
-        logging.error(cfg.model.linear)
         self.assertRegex(str(cfg.model.linear), "dots_saveable")
-
+        with self.assertRaisesRegex(ValueError, "unknown is not found in.*"):
+            select_mesh_config(cfg, mesh_selector="gpu-p5.48xlarge-128")
         select_mesh_config(cfg, mesh_selector="gpu-p5.48xlarge-64")
         self.assertIsNone(cfg.mesh_shape)
 

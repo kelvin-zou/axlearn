@@ -49,7 +49,7 @@ from axlearn.experiments.text.gpt.common import model_config as common_model_con
 from axlearn.experiments.text.gpt.common import scaled_hidden_dim, update_model_remat_config
 from axlearn.experiments.trainer_config_utils import TrainerConfigFn
 
-MODEL_SIZES = ("test", "7B", "70B", "405B")
+MODEL_SIZES = ("test", "7B", "70B")
 
 
 class Version(enum.Enum):
@@ -92,13 +92,11 @@ TOTAL_TOKENS = {
         "test": 2 * (1024**4),  # 2T tokens
         "7B": 2 * (1024**4),  # 2T tokens
         "70B": 2 * (1024**4),  # 2T tokens
-        "405B": 15 * (1024**4),  # 15T tokens
     },
     Version.V3: {
         "test": 15 * (1024**4),  # 15T tokens
         "7B": 15 * (1024**4),  # 15T tokens
         "70B": 15 * (1024**4),  # 15T tokens
-        "405B": 15 * (1024**4),  # 15T tokens
     },
 }
 
@@ -122,6 +120,10 @@ def get_trainer_kwargs(
         num_kv_heads = 8
 
     rope_theta = ROPE_THETA[version]
+
+    offload_saveable_policy = config_for_function(
+        extended_checkpoint_policies.offload_dots_saveble
+    ).set(offload_src="device", offload_dst="pinned_host")
 
     # dict() is more readable here.
     # pylint: disable=use-dict-literal
@@ -153,7 +155,6 @@ def get_trainer_kwargs(
                 hidden_dim=128 * 32,
                 num_heads=32,
                 num_kv_heads=num_kv_heads,
-                ffn_dim=scaled_hidden_dim(scale=3.5),
                 rope_theta=rope_theta,
                 flash_attention=flash_attention,
             ),
@@ -179,6 +180,9 @@ def get_trainer_kwargs(
                         world_size=256,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
                         grad_accumulation=4,
+                        remat_policy={
+                            "model.decoder.transformer.layer": jax_remat_policies.dots_saveable
+                        },
                     ),
                 ),
                 (
@@ -187,6 +191,9 @@ def get_trainer_kwargs(
                         world_size=512,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
                         grad_accumulation=2,
+                        remat_policy={
+                            "model.decoder.transformer.layer": jax_remat_policies.dots_saveable
+                        },
                     ),
                 ),
                 # v2 on tpu-v5litepod-256x4: 1.87s (46% MFU), HBM usage: 11GB/chip.
@@ -195,7 +202,9 @@ def get_trainer_kwargs(
                     AdvancedMeshRule(
                         world_size=1024,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
-                        remat_policy=jax_remat_policies.dots_saveable,
+                        remat_policy={
+                            "model.decoder.transformer.layer": jax_remat_policies.dots_saveable
+                        },
                     ),
                 ),
                 # tpu-v5p.
@@ -218,7 +227,7 @@ def get_trainer_kwargs(
                 num_heads=64,
                 # No GQA support in V1 models, so num_kv_heads is the same as num_heads.
                 num_kv_heads=None if version == Version.V1 else 8,
-                ffn_dim=scaled_hidden_dim(scale=3.5),
+                # ffn_dim=scaled_hidden_dim(scale=3.5),
                 rope_theta=rope_theta,
                 flash_attention=flash_attention,
             ),
@@ -237,7 +246,7 @@ def get_trainer_kwargs(
                     AdvancedMeshRule(
                         world_size=1024,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
-                        # remat_policy=offload_dots_saveble,
+                        remat_policy={"model.decoder.transformer.layer": offload_saveable_policy},
                     ),
                 ),
                 (
@@ -246,7 +255,7 @@ def get_trainer_kwargs(
                         world_size=256,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
                         grad_accumulation=4,
-                        # remat_policy=offload_dots_saveble,
+                        remat_policy={"model.decoder.transformer.layer": offload_saveable_policy},
                     ),
                 ),
                 (
@@ -255,7 +264,7 @@ def get_trainer_kwargs(
                         world_size=512,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
                         grad_accumulation=2,
-                        # remat_policy=offload_dots_saveble,
+                        remat_policy={"model.decoder.transformer.layer": offload_saveable_policy},
                     ),
                 ),
                 # H100/A100 80G. Maximum per-node batch size = 16, hence need >= 64 nodes.
@@ -264,29 +273,6 @@ def get_trainer_kwargs(
                     "gpu-(p5.48xlarge|p4de.24xlarge)-(512|1024)",
                     mesh_shape_from_axes(data=-1, fsdp=128),
                 ),
-            ),
-        )
-    elif model_size == "405B":
-        trainer_kwargs = dict(
-            model_kwargs=dict(
-                num_layers=126,
-                hidden_dim=128 * 128,
-                num_heads=128,
-                num_kv_heads=8,
-                ffn_dim=scaled_hidden_dim(scale=3.25),
-                rope_theta=rope_theta,
-                flash_attention=flash_attention,
-            ),
-            learner_kwargs=dict(peak_lr=8e-5, weight_decay=0.1),
-            max_sequence_length=max_sequence_length,
-            train_batch_size=256,
-            # logical_batch_size=32,
-            # logical_feed_indices=list(range(0, 64, 64 // 32)),
-            max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(fsdp=-1),
-            mesh_rules=(
-                # tpu-v5e. step time: TBD.
-                ("tpu-v5p-*", mesh_shape_from_axes(data=-1, fsdp=16, model=8)),
             ),
         )
     else:
@@ -386,8 +372,6 @@ def trainer_configs(
         Version, MODEL_SIZES, [True, False]
     ):
         # 400B model is only available in V3.
-        if version == Version.V1 and model_size == "405B":
-            continue
         vocab_size = VOCAB_SIZE[version]
         config_name = make_config_name(
             arch=arch,
@@ -458,31 +442,5 @@ def trainer_configs(
             # Make single-host config
             make_single_host_config_func = functools.partial(make_single_host_config, config_name)
             config_map[f"{config_name}-single-host"] = make_single_host_config_func
-
-        if model_size in ("7B", "70B", "405B"):
-
-            def make_config_with_act_offload(base_config_name: str) -> SpmdTrainer.Config:
-                """Make configs for the v5e/v6e tpu with low HBM."""
-                # pytype: disable=annotation-type-mismatch
-                cfg: SpmdTrainer.Config = config_map[base_config_name]().clone()
-                # pytype: enable=annotation-type-mismatch
-                cfg.model.decoder.transformer.layer.remat_spec = RematSpec(
-                    prevent_cse=True,
-                    policy=config_for_function(
-                        extended_checkpoint_policies.offload_dots_saveble
-                    ).set(offload_src="device", offload_dst="pinned_host"),
-                )
-                # update_model_remat_config(
-                #     stack_cfg=cfg.model.decoder.transformer,
-                #     layer_cfg=cfg.model.decoder.transformer.layer,
-                #     offload_dst="pinned_host",
-                # )
-                return cfg
-
-            make_litepod_config_func = functools.partial(make_config_with_act_offload, config_name)
-
-            # We add -litepod to the config name for v5e/v6e and other HW with low HBM.
-            # Due to limited HBM, we offload some activations to host mem.
-            config_map[f"{config_name}-litepod"] = make_litepod_config_func
 
     return config_map

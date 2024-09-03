@@ -1109,16 +1109,16 @@ def select_mesh_config(trainer_config: SpmdTrainer.Config, *, mesh_selector: str
                         steps=mesh_rule.grad_accumulation,
                         metric_accumulator=MetricAccumulator.default_config(),
                     )
-                # Apply remat policies.
                 if mesh_rule.remat_policy is not None:
                     # Apply each remat policy to the corresponding module.
-                    # Currently only  "*" is supported to apply to all modules.
-                    def apply_remat_policy(module, remat_policy=mesh_rule.remat_policy):
-                        if hasattr(module, "remat_spec"):
-                            module.set(remat_spec=RematSpec(prevent_cse=True, policy=remat_policy))
-                        return module
-
-                    trainer_config.model = jax.tree_util.tree_map(
-                        apply_remat_policy,
-                        trainer_config.model,
-                    )
+                    curr_module = trainer_config
+                    for module_name, remat_policy in mesh_rule.remat_policy.items():
+                        # Here we assume x.y.z format.
+                        # One example would be decoder.transformer.layer
+                        target_modules = module_name.split(".")
+                        for target_module in target_modules:
+                            if not hasattr(curr_module, target_module):
+                                raise ValueError(f"{target_module} is not found in {curr_module}.")
+                            curr_module = getattr(curr_module, target_module)
+                        # Here we assume all modules have remat_spec attribute.
+                        curr_module.remat_spec = RematSpec(prevent_cse=True, policy=remat_policy)
