@@ -178,7 +178,6 @@ def get_trainer_kwargs(
                     AdvancedMeshRule(
                         world_size=256,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
-                        grad_accumulation=4,
                         remat_policy={
                             "model.decoder.transformer.layer": RematSpec(
                                 prevent_cse=True, policy=offload_saveable_policy
@@ -191,7 +190,6 @@ def get_trainer_kwargs(
                     AdvancedMeshRule(
                         world_size=512,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
-                        grad_accumulation=2,
                         remat_policy={
                             "model.decoder.transformer.layer": RematSpec(
                                 prevent_cse=True, policy=offload_saveable_policy
@@ -199,7 +197,7 @@ def get_trainer_kwargs(
                         },
                     ),
                 ),
-                # v2 on tpu-v5litepod-256x4: 1.87s (46% MFU), HBM usage: 11GB/chip.
+                # v2 on tpu-v5litepod-256x4: 2.21s (46% MFU), HBM usage: 11GB/chip.
                 (
                     "tpu-v5litepod-256-4",
                     AdvancedMeshRule(
@@ -207,7 +205,7 @@ def get_trainer_kwargs(
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
                         remat_policy={
                             "model.decoder.transformer.layer": RematSpec(
-                                prevent_cse=True, policy=offload_saveable_policy
+                                prevent_cse=True, policy=jax_remat_policies.dots_saveable
                             ),
                         },
                     ),
@@ -243,7 +241,7 @@ def get_trainer_kwargs(
             mesh_shape=mesh_shape_from_axes(fsdp=-1),
             mesh_rules=(
                 # TPU V5e maximum per device batch is 1.
-                # with all activation offloading, HBM usage: 14GB/chip.
+                # with all activation offloading, HBM usage: 14.6GB/chip.
                 # TODO(kelvin-zou): Fix the env issue for internal use cases.
                 # tpu-v5e-256-4. step time: 14.3736s (59.87% MFU).
                 (
@@ -259,24 +257,11 @@ def get_trainer_kwargs(
                     ),
                 ),
                 (
-                    "tpu-v5litepod-256",
-                    AdvancedMeshRule(
-                        world_size=256,
-                        mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
-                        grad_accumulation=4,
-                        remat_policy={
-                            "model.decoder.transformer.layer": RematSpec(
-                                prevent_cse=True, policy=offload_saveable_policy
-                            ),
-                        },
-                    ),
-                ),
-                (
                     "tpu-v5litepod-256-2",
                     AdvancedMeshRule(
                         world_size=512,
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
-                        grad_accumulation=2,
+                        grad_accumulation=4, # Due to additional cached grads in memory, we have to reduce activation and thus reduce per-microbatch size.
                         remat_policy={
                             "model.decoder.transformer.layer": RematSpec(
                                 prevent_cse=True, policy=offload_saveable_policy
