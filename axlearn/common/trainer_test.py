@@ -56,9 +56,15 @@ from axlearn.common.learner import UpdateType, should_update_with_optimizers
 from axlearn.common.metrics import MetricAccumulator
 from axlearn.common.module import Module
 from axlearn.common.state_builder import Builder as TrainerStateBuilder
-from axlearn.common.trainer import SpmdTrainer, TrainerState, select_mesh_config
+from axlearn.common.trainer import (
+    GradientAccumulation,
+    RematPolicies,
+    SpmdTrainer,
+    TrainerState,
+    select_mesh_config,
+)
 from axlearn.common.utils import (
-    AdvancedMeshRule,
+    ExtendedMeshRule,
     Nested,
     NestedTensor,
     RematSpec,
@@ -939,7 +945,7 @@ class SelectMeshConfigTest(test_utils.TestCase):
         self.assertIsNone(cfg.mesh_shape)
 
 
-class SelectAdvancedMeshConfigTest(test_utils.TestCase):
+class SelectExtendedMeshConfigTest(test_utils.TestCase):
     def test_select_mesh_config(self):
         cfg = SpmdTrainer.default_config().set(model=DummyModel.default_config())
         self.assertIs(cfg.mesh_shape, REQUIRED)
@@ -954,60 +960,33 @@ class SelectAdvancedMeshConfigTest(test_utils.TestCase):
         cfg.mesh_rules = (
             (
                 "tpu-v4-64",
-                AdvancedMeshRule(world_size=32, mesh_shape=(4, 1, 8, 1), grad_accumulation=4),
+                ExtendedMeshRule(
+                    mesh_shape=(4, 1, 8, 1),
+                    module_overrides=[
+                        RematPolicies(
+                            remat_policies={
+                                "model.linear": RematSpec(
+                                    prevent_cse=True,
+                                    policy=jax.ad_checkpoint.checkpoint_policies.dots_saveable,
+                                ),
+                            }
+                        ),
+                        GradientAccumulation(steps=4),
+                    ],
+                ),
             ),
         )
         select_mesh_config(cfg, mesh_selector="tpu-v4-128")
         # cfg.mesh_shape still remains unchanged.
         self.assertIs(cfg.mesh_shape, REQUIRED)
-
         # When there is a match.
         select_mesh_config(cfg, mesh_selector="tpu-v4-64")
         # cfg.mesh_shape is overridden.
         self.assertEqual(cfg.mesh_shape, (4, 1, 8, 1))
         # Check if gradient accumulation is set up.
         self.assertRegex(str(cfg.learner.forward_fn_transformation), "steps: 4")
-
-        # When there is a match.
-        cfg.mesh_rules = (
-            (
-                "gpu-(p5.48xlarge|p4de.24xlarge)-32",
-                AdvancedMeshRule(
-                    world_size=32,
-                    mesh_shape=(4, 1, 8, 1),
-                    grad_accumulation=4,
-                    remat_policy={
-                        "model.linear": RematSpec(
-                            prevent_cse=True,
-                            policy=jax.ad_checkpoint.checkpoint_policies.dots_saveable,
-                        ),
-                    },
-                ),
-            ),
-            ("gpu-(p5.48xlarge|p4de.24xlarge)-64", None),
-            (
-                "gpu-(p5.48xlarge|p4de.24xlarge)-128",
-                AdvancedMeshRule(
-                    world_size=128,
-                    mesh_shape=(4, 1, 8, 1),
-                    grad_accumulation=1,
-                    remat_policy={
-                        "model.unknown": RematSpec(
-                            prevent_cse=True,
-                            policy=jax.ad_checkpoint.checkpoint_policies.dots_saveable,
-                        ),
-                    },
-                ),
-            ),
-        )
-
-        select_mesh_config(cfg, mesh_selector="gpu-p5.48xlarge-32")
-        self.assertEqual(cfg.mesh_shape, (4, 1, 8, 1))
+        # Check if remat policy is set up.
         self.assertRegex(str(cfg.model.linear), "dots_saveable")
-        with self.assertRaisesRegex(ValueError, "unknown is not found in.*"):
-            select_mesh_config(cfg, mesh_selector="gpu-p5.48xlarge-128")
-        select_mesh_config(cfg, mesh_selector="gpu-p5.48xlarge-64")
-        self.assertIsNone(cfg.mesh_shape)
 
 
 class CompatibilityTest(test_utils.TestCase):

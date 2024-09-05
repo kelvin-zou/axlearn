@@ -933,3 +933,13 @@ def maybe_set_config(cfg: _ConfigBase, **kwargs) -> _ConfigBase:
         if hasattr(cfg, key):
             setattr(cfg, key, value)
     return cfg
+
+
+class ModuleOverride:
+    """A class that modifies a config object in place."""
+
+    def __init__(self, **kwargs):
+        ...
+
+    def __call__(self, cfg: InstantiableConfig) -> InstantiableConfig:
+        ...

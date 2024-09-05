@@ -48,7 +48,7 @@ from jax.experimental import maps, mesh_utils, multihost_utils
 from jax.sharding import PartitionSpec
 
 from axlearn.common import serialization
-from axlearn.common.config import ConfigOr, is_named_tuple
+from axlearn.common.config import ConfigOr, ModuleOverride, is_named_tuple
 
 # New code should use Nested[XX] instead of NestedXX.
 # Old definitions are provided for backwards compatibility.
@@ -129,21 +129,15 @@ extended_checkpoint_policies = types.SimpleNamespace(offload_dots_saveble=offloa
 
 
 @dataclasses.dataclass
-class AdvancedMeshRule:
+class ExtendedMeshRule:
     """A rule for advanced mesh configuration.
 
     We allow the user to modify the mesh shape and other system-level
     configurations like the remat rule and gradient accumulation.
     """
 
-    # World size will be used for auto-configure data sharding in the future.
-    world_size: Union[int, list[int]]
     mesh_shape: Optional[Union[MeshShape, HybridMeshShape]] = None
-    # NOTE(kelvin-zou): please be careful when use *only_these_names policies,
-    # the module's names may change during module config override later on.
-    # Use dots_saveable and offload_dots_saveble when possible.
-    remat_policy: Optional[Dict[str, Optional[RematSpec]]] = None
-    grad_accumulation: int = 1
+    module_overrides: Optional[List[ModuleOverride]] = None
 
 
 @dataclasses.dataclass

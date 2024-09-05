@@ -38,6 +38,7 @@ from axlearn.common.config import (
     REQUIRED,
     ConfigOr,
     InstantiableConfig,
+    ModuleOverride,
     Required,
     config_class,
     maybe_instantiate,
@@ -55,7 +56,7 @@ from axlearn.common.state_builder import Builder as TrainerStateBuilder
 from axlearn.common.summary_writer import BaseWriter, SummaryWriter
 from axlearn.common.update_transformation import ForwardOutputs
 from axlearn.common.utils import (
-    AdvancedMeshRule,
+    ExtendedMeshRule,
     HybridMeshShape,
     MeshShape,
     Nested,
@@ -68,6 +69,7 @@ from axlearn.common.utils import (
     match_regex_rules,
     thread_stack_traces,
 )
+from axlearn.experiments.trainer_config_utils import chain_override
 
 
 class TrainerState(NamedTuple):
@@ -140,7 +142,7 @@ class SpmdTrainer(Module):
         #
         # If no rule matches, the default mesh configuration will be used.
         mesh_rules: Optional[
-            Sequence[Tuple[str, Optional[Union[MeshShape, HybridMeshShape, AdvancedMeshRule]]]]
+            Sequence[Tuple[str, Optional[Union[MeshShape, HybridMeshShape, ExtendedMeshRule]]]]
         ] = None
 
         # The model config.
@@ -1077,6 +1079,76 @@ class SpmdTrainer(Module):
         return updated_stop_trace_step
 
 
+class GradientAccumulation(ModuleOverride):
+    """Accumulate gradients for `steps` steps.
+    This function is placed here to have access to SpmdTrainer.Config.
+
+    Args:
+        steps: the number of steps to accumulate gradients.
+        metric_accumulator: the metric accumulator to be used.
+    """
+
+    def __init__(self, steps: int, metric_accumulator=MetricAccumulator.default_config()):
+        self._steps = steps
+        self._metric_accumulator = metric_accumulator
+
+    def __call__(self, cfg: SpmdTrainer.Config) -> SpmdTrainer.Config:
+        """Overwrite the forward_fn_transformation to accumulate gradients for `steps` steps.
+
+        Args:
+            cfg (SpmdTrainer.Config): the trainer config to be modified.
+
+        Returns:
+            SpmdTrainer.Config: the modified trainer config.
+        """
+        cfg.learner.forward_fn_transformation = config.config_for_function(
+            with_minibatch_steps
+        ).set(
+            steps=self._steps,
+            metric_accumulator=self._metric_accumulator,
+        )
+        return cfg
+
+
+class RematPolicies(ModuleOverride):
+    """Remat policies for the specified modules.
+
+    Args:
+        remat_policies: a dict for the remat policies to the specified modules.
+    """
+
+    def __init__(self, remat_policies: Dict[str, RematSpec]):
+        self.remat_policies = remat_policies
+
+    def __call__(self, cfg: InstantiableConfig) -> InstantiableConfig:
+        """Update the remat policy for the specified modules.
+
+        Args:
+            cfg (SpmdTrainer.Config): the trainer config to be modified.
+
+        Raises:
+            ValueError: the target module is not found.
+            ValueError: the remat_spec attribute is not found.
+
+        Returns:
+            SpmdTrainer.Config: the modified trainer config.
+        """
+        for module_name, remat_spec in self.remat_policies.items():
+            # Here we assume x.y.z format.
+            # One example would be model.decoder.transformer.layer.
+            target_modules = module_name.split(".")
+            curr_module = cfg
+            for target_module in target_modules:
+                if not hasattr(curr_module, target_module):
+                    raise ValueError(f"{target_module} is not found in {curr_module}.")
+                curr_module = getattr(curr_module, target_module)
+            # Here we assume all modules have remat_spec attribute.
+            if not hasattr(curr_module, "remat_spec"):
+                raise ValueError(f"{curr_module} does not have remat_spec attribute")
+            curr_module.remat_spec = remat_spec
+        return cfg
+
+
 def select_mesh_config(trainer_config: SpmdTrainer.Config, *, mesh_selector: str):
     """Selects a mesh rule (if one matches `mesh_selector` to override mesh config.
 
@@ -1094,31 +1166,12 @@ def select_mesh_config(trainer_config: SpmdTrainer.Config, *, mesh_selector: str
         logging.info("Mesh selector %s matches mesh rule %s", mesh_selector, mesh_rule)
         if mesh_rule is not REQUIRED:
             # Mesh config is just mesh rule or hybrid mesh rule.
-            if type(mesh_rule) is HybridMeshShape or type(mesh_rule) is tuple or mesh_rule is None:
+            if not isinstance(mesh_rule, ExtendedMeshRule):
                 logging.info("Applying mesh rule %s", mesh_rule)
                 trainer_config.mesh_shape = mesh_rule
-            elif type(mesh_rule) is AdvancedMeshRule:
+            else:
                 # Override mesh config with mesh rule.
                 if mesh_rule.mesh_shape is not None:
                     trainer_config.mesh_shape = mesh_rule.mesh_shape
-                # Apply grad accumulation.
-                if mesh_rule.grad_accumulation > 1:
-                    trainer_config.learner.forward_fn_transformation = config.config_for_function(
-                        with_minibatch_steps
-                    ).set(
-                        steps=mesh_rule.grad_accumulation,
-                        metric_accumulator=MetricAccumulator.default_config(),
-                    )
-                if mesh_rule.remat_policy is not None:
-                    # Apply each remat policy to the corresponding module.
-                    curr_module = trainer_config
-                    for module_name, remat_spec in mesh_rule.remat_policy.items():
-                        # Here we assume x.y.z format.
-                        # One example would be model.decoder.transformer.layer.
-                        target_modules = module_name.split(".")
-                        for target_module in target_modules:
-                            if not hasattr(curr_module, target_module):
-                                raise ValueError(f"{target_module} is not found in {curr_module}.")
-                            curr_module = getattr(curr_module, target_module)
-                        # Here we assume all modules have remat_spec attribute.
-                        curr_module.remat_spec = remat_spec
+                if mesh_rule.module_overrides is not None:
+                    trainer_config = chain_override(trainer_config, mesh_rule.module_overrides)

@@ -22,6 +22,7 @@ from axlearn.common.attention import (
     BaseStackedTransformerLayer,
     FusedGroupedQKVLinear,
     FusedQKVLinear,
+    build_remat_spec,
     GroupedQueryAttention,
     MultiheadAttention,
     RepeatedTransformerLayer,
@@ -32,8 +33,8 @@ from axlearn.common.config import config_for_function
 from axlearn.common.embedding import TransformerTextEmbeddings
 from axlearn.common.gradient_accumulation import with_minibatch_steps
 from axlearn.common.layers import RMSNorm
-from axlearn.common.trainer import SpmdTrainer
-from axlearn.common.utils import AdvancedMeshRule, extended_checkpoint_policies
+from axlearn.common.trainer import GradientAccumulation, RematPolicies, SpmdTrainer
+from axlearn.common.utils import ExtendedMeshRule, extended_checkpoint_policies
 from axlearn.experiments.text.gpt.common import (
     STEP_DTYPE,
     SourceBuilder,
@@ -175,39 +176,48 @@ def get_trainer_kwargs(
                 # tpu-v5e.
                 (
                     "tpu-v5litepod-256",
-                    AdvancedMeshRule(
-                        world_size=256,
+                    ExtendedMeshRule(
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
-                        remat_policy={
-                            "model.decoder.transformer.layer": RematSpec(
-                                prevent_cse=True, policy=offload_saveable_policy
-                            ),
-                        },
+                        module_overrides=[
+                            RematPolicies(
+                                {
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=True, policy=offload_saveable_policy
+                                    ),
+                                }
+                            )
+                        ],
                     ),
                 ),
                 (
                     "tpu-v5litepod-256-2",
-                    AdvancedMeshRule(
-                        world_size=512,
+                    ExtendedMeshRule(
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
-                        remat_policy={
-                            "model.decoder.transformer.layer": RematSpec(
-                                prevent_cse=True, policy=offload_saveable_policy
-                            ),
-                        },
+                        module_overrides=[
+                            RematPolicies(
+                                {
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=True, policy=offload_saveable_policy
+                                    ),
+                                }
+                            )
+                        ],
                     ),
                 ),
-                # v2 on tpu-v5litepod-256x4: 2.21s (46% MFU), HBM usage: 11GB/chip.
+                # v2 on tpu-v5litepod-256x4: 2.21s (46% MFU), HBM usage: 14GB/chip.
                 (
                     "tpu-v5litepod-256-4",
-                    AdvancedMeshRule(
-                        world_size=1024,
+                    ExtendedMeshRule(
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
-                        remat_policy={
-                            "model.decoder.transformer.layer": RematSpec(
-                                prevent_cse=True, policy=jax_remat_policies.dots_saveable
-                            ),
-                        },
+                        module_overrides=[
+                            RematPolicies(
+                                {
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=True, policy=jax_remat_policies.dots_saveable
+                                    ),
+                                }
+                            )
+                        ],
                     ),
                 ),
                 # tpu-v5p.
@@ -230,7 +240,7 @@ def get_trainer_kwargs(
                 num_heads=64,
                 # No GQA support in V1 models, so num_kv_heads is the same as num_heads.
                 num_kv_heads=None if version == Version.V1 else 8,
-                # ffn_dim=scaled_hidden_dim(scale=3.5),
+                ffn_dim=scaled_hidden_dim(scale=3.5),
                 rope_theta=rope_theta,
                 flash_attention=flash_attention,
             ),
@@ -246,27 +256,35 @@ def get_trainer_kwargs(
                 # tpu-v5e-256-4. step time: 14.3736s (59.87% MFU).
                 (
                     "tpu-v5litepod-256-4",
-                    AdvancedMeshRule(
-                        world_size=1024,
+                    ExtendedMeshRule(
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
-                        remat_policy={
-                            "model.decoder.transformer.layer": RematSpec(
-                                prevent_cse=True, policy=offload_saveable_policy
-                            ),
-                        },
+                        module_overrides=[
+                            RematPolicies(
+                                {
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=True, policy=offload_saveable_policy
+                                    ),
+                                }
+                            )
+                        ],
                     ),
                 ),
                 (
                     "tpu-v5litepod-256-2",
-                    AdvancedMeshRule(
-                        world_size=512,
+                    ExtendedMeshRule(
                         mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256),
-                        grad_accumulation=4, # Due to additional cached grads in memory, we have to reduce activation and thus reduce per-microbatch size.
-                        remat_policy={
-                            "model.decoder.transformer.layer": RematSpec(
-                                prevent_cse=True, policy=offload_saveable_policy
+                        # Due to additional cached grads in memory, 
+                        # we have to reduce activation and thus reduce per-microbatch size.
+                        module_overrides=[
+                            RematPolicies(
+                                {
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=True, policy=offload_saveable_policy
+                                    ),
+                                }
                             ),
-                        },
+                            GradientAccumulation(steps=4),
+                        ],
                     ),
                 ),
                 # H100/A100 80G. Maximum per-node batch size = 16, hence need >= 64 nodes.
