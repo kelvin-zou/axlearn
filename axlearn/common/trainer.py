@@ -1109,6 +1109,10 @@ class GradientAccumulation(ModuleOverride):
         )
         return cfg
 
+    def __repr__(self): 
+        return f"{self.__class__.__name__}: steps={self._steps}, metric_accumulator={self._metric_accumulator}"
+
+
 
 class RematPolicies(ModuleOverride):
     """Remat policies for the specified modules.
@@ -1118,7 +1122,7 @@ class RematPolicies(ModuleOverride):
     """
 
     def __init__(self, remat_policies: Dict[str, RematSpec]):
-        self.remat_policies = remat_policies
+        self._remat_policies = remat_policies
 
     def __call__(self, cfg: InstantiableConfig) -> InstantiableConfig:
         """Update the remat policy for the specified modules.
@@ -1133,7 +1137,7 @@ class RematPolicies(ModuleOverride):
         Returns:
             SpmdTrainer.Config: the modified trainer config.
         """
-        for module_name, remat_spec in self.remat_policies.items():
+        for module_name, remat_spec in self._remat_policies.items():
             # Here we assume x.y.z format.
             # One example would be model.decoder.transformer.layer.
             target_modules = module_name.split(".")
@@ -1147,6 +1151,9 @@ class RematPolicies(ModuleOverride):
                 raise ValueError(f"{curr_module} does not have remat_spec attribute")
             curr_module.remat_spec = remat_spec
         return cfg
+    
+    def __repr__(self): 
+        return f"{self.__class__.__name__}: remat_policies={self._remat_policies}"
 
 
 def select_mesh_config(trainer_config: SpmdTrainer.Config, *, mesh_selector: str):

@@ -128,7 +128,7 @@ mesh_rules[1][1]['mesh_shape'][2]: 1
 mesh_rules[1][1]['mesh_shape'][3]: 256
 mesh_rules[1][1]['mesh_shape'][4]: 1
 mesh_rules[1][1]['mesh_shape'][5]: 1
-mesh_rules[1][1]['module_overrides'][0]: <axlearn.common.trainer.RematPolicies object at 0x389320520>
+mesh_rules[1][1]['module_overrides'][0]: RematPolicies: remat_policies={'model.decoder.transformer.layer': RematSpec(prevent_cse=True, policy=config_for_function(axlearn.common.utils.offload_dots_saveble)(fn=<function offload_dots_saveble at 0x132b629d0>, offload_src='device', offload_dst='pinned_host'))}
 mesh_rules[2][0]: 'tpu-v5litepod-256-2'
 mesh_rules[2][1]['mesh_shape'][0]: 1
 mesh_rules[2][1]['mesh_shape'][1]: -1
@@ -136,7 +136,7 @@ mesh_rules[2][1]['mesh_shape'][2]: 1
 mesh_rules[2][1]['mesh_shape'][3]: 256
 mesh_rules[2][1]['mesh_shape'][4]: 1
 mesh_rules[2][1]['mesh_shape'][5]: 1
-mesh_rules[2][1]['module_overrides'][0]: <axlearn.common.trainer.RematPolicies object at 0x389320970>
+mesh_rules[2][1]['module_overrides'][0]: RematPolicies: remat_policies={'model.decoder.transformer.layer': RematSpec(prevent_cse=True, policy=config_for_function(axlearn.common.utils.offload_dots_saveble)(fn=<function offload_dots_saveble at 0x132b629d0>, offload_src='device', offload_dst='pinned_host'))}
 mesh_rules[3][0]: 'tpu-v5litepod-256-4'
 mesh_rules[3][1]['mesh_shape'][0]: 1
 mesh_rules[3][1]['mesh_shape'][1]: -1
@@ -144,7 +144,7 @@ mesh_rules[3][1]['mesh_shape'][2]: 1
 mesh_rules[3][1]['mesh_shape'][3]: 256
 mesh_rules[3][1]['mesh_shape'][4]: 1
 mesh_rules[3][1]['mesh_shape'][5]: 1
-mesh_rules[3][1]['module_overrides'][0]: <axlearn.common.trainer.RematPolicies object at 0x38930de80>
+mesh_rules[3][1]['module_overrides'][0]: RematPolicies: remat_policies={'model.decoder.transformer.layer': RematSpec(prevent_cse=True, policy=<function dots_saveable at 0x127f70b80>)}
 mesh_rules[4][0]: 'tpu-v5p-.*'
 mesh_rules[4][1][0]: 1
 mesh_rules[4][1][1]: -1

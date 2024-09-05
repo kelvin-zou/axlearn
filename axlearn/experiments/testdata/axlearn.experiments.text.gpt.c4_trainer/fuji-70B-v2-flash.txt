@@ -121,7 +121,7 @@ mesh_rules[0][1]['mesh_shape'][2]: 1
 mesh_rules[0][1]['mesh_shape'][3]: 256
 mesh_rules[0][1]['mesh_shape'][4]: 1
 mesh_rules[0][1]['mesh_shape'][5]: 1
-mesh_rules[0][1]['module_overrides'][0]: <axlearn.common.trainer.RematPolicies object at 0x38c0f8ee0>
+mesh_rules[0][1]['module_overrides'][0]: RematPolicies: remat_policies={'model.decoder.transformer.layer': RematSpec(prevent_cse=True, policy=config_for_function(axlearn.common.utils.offload_dots_saveble)(fn=<function offload_dots_saveble at 0x145a619d0>, offload_src='device', offload_dst='pinned_host'))}
 mesh_rules[1][0]: 'tpu-v5litepod-256-2'
 mesh_rules[1][1]['mesh_shape'][0]: 1
 mesh_rules[1][1]['mesh_shape'][1]: -1
@@ -129,8 +129,8 @@ mesh_rules[1][1]['mesh_shape'][2]: 1
 mesh_rules[1][1]['mesh_shape'][3]: 256
 mesh_rules[1][1]['mesh_shape'][4]: 1
 mesh_rules[1][1]['mesh_shape'][5]: 1
-mesh_rules[1][1]['module_overrides'][0]: <axlearn.common.trainer.RematPolicies object at 0x38c0f8280>
-mesh_rules[1][1]['module_overrides'][1]: <axlearn.common.trainer.GradientAccumulation object at 0x38c0f8700>
+mesh_rules[1][1]['module_overrides'][0]: RematPolicies: remat_policies={'model.decoder.transformer.layer': RematSpec(prevent_cse=True, policy=config_for_function(axlearn.common.utils.offload_dots_saveble)(fn=<function offload_dots_saveble at 0x145a619d0>, offload_src='device', offload_dst='pinned_host'))}
+mesh_rules[1][1]['module_overrides'][1]: GradientAccumulation: steps=4, metric_accumulator=klass: 'axlearn.common.metrics.MetricAccumulator'
 mesh_rules[2][0]: 'gpu-(p5.48xlarge|p4de.24xlarge)-(512|1024)'
 mesh_rules[2][1][0]: 1
 mesh_rules[2][1][1]: -1
