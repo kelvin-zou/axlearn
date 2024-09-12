@@ -8,20 +8,8 @@ import math
 import os.path
 import threading
 import time
-from typing import (
-    Any,
-    Callable,
-    ContextManager,
-    Dict,
-    List,
-    Literal,
-    NamedTuple,
-    Optional,
-    Sequence,
-    Set,
-    Tuple,
-    Union,
-)
+from collections.abc import Sequence
+from typing import Any, Callable, ContextManager, Literal, NamedTuple, Optional, Union
 
 import jax
 import tensorflow as tf
@@ -142,7 +130,7 @@ class SpmdTrainer(Module):
         #
         # If no rule matches, the default mesh configuration will be used.
         mesh_rules: Optional[
-            Sequence[Tuple[str, Optional[Union[MeshShape, HybridMeshShape, ExtendedMeshRule]]]]
+            Sequence[tuple[str, Optional[Union[MeshShape, HybridMeshShape, ExtendedMeshRule]]]]
         ] = None
 
         # The model config.
@@ -152,7 +140,7 @@ class SpmdTrainer(Module):
         # The checkpointer config.
         checkpointer: BaseCheckpointer.Config = Checkpointer.default_config()
         # A dict of evaler names to configs, each name must be non-empty.
-        evalers: Dict[str, SpmdEvaler.Config] = {}
+        evalers: dict[str, SpmdEvaler.Config] = {}
 
         # If True, saves the input iterator in checkpoints.
         #
@@ -364,7 +352,7 @@ class SpmdTrainer(Module):
             self._watchdog_thread = None
             logging.info("watchdog_thread finished")
 
-    def _watchdog_loop(self, *, context_stack: List[InvocationContext]):
+    def _watchdog_loop(self, *, context_stack: list[InvocationContext]):
         cfg = self.config
         install_context_stack(context_stack)
         while True:
@@ -388,9 +376,9 @@ class SpmdTrainer(Module):
     def _should_force_run_evals(
         self,
         *,
-        return_evaler_summaries: Optional[Union[bool, Set[str]]] = None,
-        evalers: Dict[str, SpmdEvaler.Config],
-    ) -> Set[str]:
+        return_evaler_summaries: Optional[Union[bool, set[str]]] = None,
+        evalers: dict[str, SpmdEvaler.Config],
+    ) -> set[str]:
         """Determines which, if any, evalers to force run at the last training step.
 
         Args:
@@ -412,7 +400,7 @@ class SpmdTrainer(Module):
         force_run_evals = set()
         if return_evaler_summaries is True:
             force_run_evals = set(evalers.keys())
-        elif isinstance(return_evaler_summaries, Set):
+        elif isinstance(return_evaler_summaries, set):
             for evaler_name in return_evaler_summaries:
                 if evaler_name not in evalers:
                     raise ValueError(
@@ -431,7 +419,7 @@ class SpmdTrainer(Module):
 
     # pylint: disable-next=too-many-statements,too-many-branches
     def run(
-        self, prng_key: Tensor, *, return_evaler_summaries: Optional[Union[bool, Set[str]]] = None
+        self, prng_key: Tensor, *, return_evaler_summaries: Optional[Union[bool, set[str]]] = None
     ) -> Optional[NestedTensor]:
         """Runs training.
 
@@ -490,9 +478,9 @@ class SpmdTrainer(Module):
                     self.vlog(3, "Start step %s", self.step)
                     output = self._run_step(
                         utils.host_to_global_device_array(input_batch),
-                        force_run_evals=force_run_eval_sets_at_max_step
-                        if self.step >= cfg.max_step
-                        else None,
+                        force_run_evals=(
+                            force_run_eval_sets_at_max_step if self.step >= cfg.max_step else None
+                        ),
                     )
                     self.vlog(3, "Done step %s", self.step)
                     num_steps += 1
@@ -582,9 +570,7 @@ class SpmdTrainer(Module):
                 built_keys=set(),
             )
         self._step = prebuilt_state.step
-        all_trainer_state_keys = set(
-            key for key, _ in utils.flatten_items(self.trainer_state_specs)
-        )
+        all_trainer_state_keys = {key for key, _ in utils.flatten_items(self.trainer_state_specs)}
         if prebuilt_state.built_keys == all_trainer_state_keys:
             logging.info(
                 "Prebuilt state has the complete trainer state.",
@@ -823,7 +809,7 @@ class SpmdTrainer(Module):
                     self._input_iter = ckpt_state["input_iter"]
             return step
 
-    def save_checkpoint(self, evaler_summaries: Optional[Dict[str, Any]]) -> Optional[int]:
+    def save_checkpoint(self, evaler_summaries: Optional[dict[str, Any]]) -> Optional[int]:
         """Saves a checkpoint (subject to checkpointer policy)."""
         cfg: SpmdTrainer.Config = self.config
         with self.mesh():
@@ -857,7 +843,7 @@ class SpmdTrainer(Module):
         return built_state
 
     def _run_step(
-        self, input_batch: NestedTensor, *, force_run_evals: Optional[Set[str]] = None
+        self, input_batch: NestedTensor, *, force_run_evals: Optional[set[str]] = None
     ) -> NestedTensor:
         """Runs a single training step.
 
@@ -907,8 +893,8 @@ class SpmdTrainer(Module):
         self,
         *,
         train_summaries: Optional[NestedTensor] = None,
-        force_runs: Optional[Set[str]] = None,
-    ) -> Dict[str, Any]:
+        force_runs: Optional[set[str]] = None,
+    ) -> dict[str, Any]:
         """Runs evaluations and returns the corresponding summaries."""
         evaler_summaries = {}
         # Note: we will use the same eval key as the training keys of the future step,
@@ -963,8 +949,8 @@ class SpmdTrainer(Module):
     def _train_step(
         self,
         state: TrainerState,
-        input_batch: Dict[str, Any],
-    ) -> Tuple[TrainerState, NestedTensor]:
+        input_batch: dict[str, Any],
+    ) -> tuple[TrainerState, NestedTensor]:
         cfg = self.config
         # Shard and (possibly) dispatch the input batch.
         if hasattr(self.input, "dispatch_global_batch"):
@@ -1036,7 +1022,7 @@ class SpmdTrainer(Module):
         )
 
     def _maybe_stop_or_start_tracing(
-        self, stop_trace_step: Optional[int], output: Optional[Dict[str, Any]]
+        self, stop_trace_step: Optional[int], output: Optional[dict[str, Any]]
     ) -> Optional[int]:
         """Stops or starts jax profiler tracing if necessary.
 

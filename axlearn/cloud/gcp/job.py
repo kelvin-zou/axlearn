@@ -6,6 +6,7 @@ Note that these utilities do not handle resource management.
 """
 
 import atexit
+import io
 import logging
 import math
 import os
@@ -13,14 +14,16 @@ import pathlib
 import re
 import shlex
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence, Union
+from typing import Any, Optional, Union
 from urllib.parse import urlparse
 
 import kubernetes as k8s
 from absl import flags
 from google.auth.credentials import Credentials
 
+from axlearn.cloud.common.bastion import _BASTION_SERIALIZED_JOBSPEC_ENV_VAR, deserialize_jobspec
 from axlearn.cloud.common.bundler import BaseDockerBundler
 from axlearn.cloud.common.job import Job
 from axlearn.cloud.common.utils import parse_kv_flags, subprocess_run
@@ -316,7 +319,7 @@ class GKEJob(GCPJob):
             queue: The Kueue LocalQueue to use. If not set, no queue is used.
         """
 
-        env_vars: Dict[str, str] = {}
+        env_vars: dict[str, str] = {}
         namespace: str = "default"
         gcsfuse_mount: Optional[GCSFuseMount] = None
         # This config is made Optional for backwards compatibility. Default is False.
@@ -479,7 +482,7 @@ class TPUGKEJob(GKEJob):
         """
         cfg: TPUGKEJob.Config = self.config
         system = USER_FACING_NAME_TO_SYSTEM_CHARACTERISTICS[self._tpu_type]
-        annotations, selector, volumes, tolerations = {}, {}, [], []
+        annotations, labels, selector, volumes, tolerations = {}, {}, {}, [], []
 
         if cfg.gcsfuse_mount:
             # Mount a GCS bucket as a volume.
@@ -515,6 +518,7 @@ class TPUGKEJob(GKEJob):
         if tier == "0" and cfg.reservation is not None:
             logging.info("Found tier=%s in env. Using reservation=%s", tier, cfg.reservation)
             selector.update({"cloud.google.com/reservation-name": cfg.reservation})
+            labels.update({"bastion-tier": "reserved"})
         else:
             logging.info("Found tier=%s in env. Using spot quota", tier)
             selector.update({"cloud.google.com/gke-spot": "true"})
@@ -526,6 +530,7 @@ class TPUGKEJob(GKEJob):
                     "effect": "NoSchedule",
                 }
             )
+            labels.update({"bastion-tier": "spot"})
 
         if cfg.enable_tpu_ici_resiliency is not None:
             selector.update(
@@ -561,6 +566,17 @@ class TPUGKEJob(GKEJob):
                 }
             )
 
+        if os.environ.get(_BASTION_SERIALIZED_JOBSPEC_ENV_VAR):
+            spec = deserialize_jobspec(
+                io.StringIO(os.environ.get(_BASTION_SERIALIZED_JOBSPEC_ENV_VAR))
+            )
+
+            labels.update({"job-priority": str(spec.metadata.priority)})
+            labels.update({"user-id": spec.metadata.user_id})
+
+            # For job-priority to be populated to node labels when tpu-provisioner is used.
+            selector.update({"job-priority": str(spec.metadata.priority)})
+
         annotations.update(
             {
                 # Disable gcp auto-provisioner or not.
@@ -572,7 +588,7 @@ class TPUGKEJob(GKEJob):
         )
 
         return dict(
-            metadata=dict(annotations=annotations),
+            metadata=dict(annotations=annotations, labels=labels),
             spec=dict(
                 # NOTE: Don't set hostNetwork or dnsPolicy for compat with Workload Identity.
                 terminationGracePeriodSeconds=60,
@@ -764,7 +780,7 @@ class GPUGKEJob(GKEJob):
             {"name": "tcpx-nccl-plugin-volume", "mountPath": "/usr/local/tcpx"},
         ]
 
-        env_vars: Dict[str, str] = {}
+        env_vars: dict[str, str] = {}
         env_vars["DISTRIBUTED_COORDINATOR"] = f"{cfg.name}-job-0-0.{cfg.name}:8080"
         env_vars["NUM_PROCESSES"] = f"{cfg.accelerator.num_replicas}"
 
@@ -1050,7 +1066,7 @@ class CPUJob(GCPJob):
         self._execute_remote_cmd(cfg.command)
 
 
-def _prepare_subprocess_kwargs(kwargs: Dict) -> Dict:
+def _prepare_subprocess_kwargs(kwargs: dict) -> dict:
     """Enable check=True and capture all outputs by default."""
     kwargs.setdefault("text", True)
     kwargs.setdefault("check", True)
@@ -1105,7 +1121,7 @@ def docker_command(
     image: str,
     detached_session: Optional[str] = None,
     env: Optional[Sequence[str]] = None,
-    volumes: Optional[Dict[str, str]] = None,
+    volumes: Optional[dict[str, str]] = None,
     extra_docker_flags: Optional[Sequence[str]] = None,
 ) -> str:
     """Wraps a command with docker run.

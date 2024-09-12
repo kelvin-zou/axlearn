@@ -5,7 +5,7 @@
 # pylint: disable=protected-access
 import contextlib
 import tempfile
-from typing import List, Optional
+from typing import Optional
 from unittest import mock
 
 from absl import app, flags
@@ -16,7 +16,7 @@ from axlearn.cloud.gcp import job as gcp_job
 from axlearn.cloud.gcp.jobs import tpu_runner
 from axlearn.cloud.gcp.test_utils import mock_gcp_settings
 from axlearn.cloud.gcp.tpu import TpuInfo
-from axlearn.common.config import config_for_function
+from axlearn.common.config import config_for_function, maybe_set_config
 from axlearn.common.test_utils import TestWithTemporaryCWD
 
 
@@ -76,8 +76,8 @@ def mock_tpu_statuses(
     job: tpu_runner.TPURunnerJob,
     *,
     num_booted: int,
-    statuses: List[str],
-    returncodes: List[int],
+    statuses: list[str],
+    returncodes: list[int],
 ):
     num_vms = job._num_workers()
     # num_booted should contain number of VMs booted across all workers.
@@ -173,6 +173,7 @@ class TPURunnerJobTest(TestWithTemporaryCWD):
                 dockerfile="test-dockerfile",
             ),
         )
+        maybe_set_config(cfg.bundler, project="test-project")
         job: tpu_runner.TPURunnerJob = cfg.set(command="test-command").instantiate()
         cmd = job._wrap(cfg.command, env={"TEST_ENV": "123"})
         self.assertStartsWith(cmd, "TEST_ENV=123 docker run")

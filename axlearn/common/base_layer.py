@@ -4,7 +4,8 @@
 
 import dataclasses
 import math
-from typing import Any, Callable, Dict, Optional, Sequence, Union
+from collections.abc import Sequence
+from typing import Any, Callable, Optional, Union
 
 import jax
 import jax.ad_checkpoint
@@ -35,7 +36,7 @@ class FactorizationSpec:
 
 
 # NestedFactorizationSpec = Dict[str, Union[FactorizationSpec, "NestedFactorizationSpec"]]
-NestedFactorizationSpec = Dict[str, Union[FactorizationSpec, Any]]
+NestedFactorizationSpec = dict[str, Union[FactorizationSpec, Any]]
 
 
 # ParameterSpec is a dataclass so that jax.tree_util.tree_map does not expand it.
@@ -76,7 +77,7 @@ class ParameterSpec(TensorSpec):
     # Note that ParameterSpec.weight_decay_scale takes precedence over `per_param_scale`.
     weight_decay_scale: Optional[float] = None
 
-    def fans(self) -> Dict[str, float]:
+    def fans(self) -> dict[str, float]:
         """Returns a dictionary with keys 'fan_in', 'fan_out', and 'fan_avg' containing
         the fan values for this parameter.
 
@@ -99,9 +100,24 @@ class ParameterSpec(TensorSpec):
 
 
 # For new code, use Nested[ParameterSpec].
+<<<<<<< HEAD
 NestedParameterSpec = Optional[Union[ParameterSpec, Dict[str, Any]]]
 # Lift RematSpec from common.utils to avoid circular imports.
 RematSpec = BaseRematSpec
+=======
+NestedParameterSpec = Optional[Union[ParameterSpec, dict[str, Any]]]
+
+
+@dataclasses.dataclass
+class RematSpec:
+    """RematSpec captures the configurable arguments for 'jax.remat'.
+
+    https://github.com/google/jax/blob/1b79caa/jax/_src/ad_checkpoint.py#L99
+    """
+
+    prevent_cse: bool = True
+    policy: Optional[ConfigOr[Callable[..., bool]]] = None
+>>>>>>> main
 
 
 class ParameterNoise(Configurable):
@@ -125,7 +141,7 @@ class CompositeTensorStats(TensorStats):
 
     @config_class
     class Config(TensorStats.Config):
-        tensor_stats: Dict[str, TensorStats.Config] = {}
+        tensor_stats: dict[str, TensorStats.Config] = {}
 
         # Whether to inline child summaries.
         #
@@ -172,7 +188,7 @@ class DefaultTensorStats(CompositeTensorStats):
 
     @config_class
     class Config(CompositeTensorStats.Config):
-        tensor_stats: Dict[str, TensorStats.Config] = {
+        tensor_stats: dict[str, TensorStats.Config] = {
             "norm": TensorRMSNorm.default_config(),
             "max": TensorMaxAbs.default_config(),
         }
@@ -243,7 +259,7 @@ class BaseLayer(Module):
             self._add_child("tensor_stats", cfg.tensor_stats)
         self._remat_methods = []  # List[str]. Used for testing.
 
-    def _methods_to_wrap_for_auto_child_context(self) -> Dict[str, Callable]:
+    def _methods_to_wrap_for_auto_child_context(self) -> dict[str, Callable]:
         return {
             method: method_fn
             for method, method_fn in super()._methods_to_wrap_for_auto_child_context().items()
@@ -264,7 +280,7 @@ class BaseLayer(Module):
         return self.parent.param_init()
 
     # pylint: disable-next=no-self-use
-    def _create_layer_parameter_specs(self) -> Dict[str, ParameterSpec]:
+    def _create_layer_parameter_specs(self) -> dict[str, ParameterSpec]:
         """Subclasses can override this method to add layer parameters."""
         return {}
 
@@ -330,7 +346,7 @@ class BaseLayer(Module):
         return nullary_with_remat
 
     def create_parameter_specs_recursively(self) -> NestedParameterSpec:
-        specs: Dict[str, NestedParameterSpec] = {}
+        specs: dict[str, NestedParameterSpec] = {}
         param_specs = self._create_layer_parameter_specs()
         for name, param_spec in param_specs.items():
             partition_spec = param_spec.mesh_axes
@@ -418,10 +434,10 @@ class BaseLayer(Module):
         return params
 
     def _use_prebuilt_params(self, prebuilt: Optional[Nested[Optional[ParameterSpec]]]) -> bool:
-        prebuilt_keys = set(key for key, value in flatten_items(prebuilt) if value is not None)
+        prebuilt_keys = {key for key, value in flatten_items(prebuilt) if value is not None}
         if not prebuilt_keys:
             return False
-        param_keys = set(key for key, _ in flatten_items(self.create_parameter_specs_recursively()))
+        param_keys = {key for key, _ in flatten_items(self.create_parameter_specs_recursively())}
         if prebuilt_keys != param_keys:
             raise NotImplementedError(
                 f"Partial prebuilt params are not supported: {param_keys - prebuilt_keys}"

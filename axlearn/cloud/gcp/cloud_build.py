@@ -1,6 +1,7 @@
 # Copyright © 2024 Apple Inc.
 
 """CloudBuild utilities"""
+
 import enum
 from typing import Optional
 
@@ -61,8 +62,25 @@ class CloudBuildStatus(enum.Enum):
         return self in {CloudBuildStatus.PENDING, CloudBuildStatus.QUEUED, CloudBuildStatus.WORKING}
 
 
-def get_cloud_build_status(project_id: str, image_name: str) -> Optional[CloudBuildStatus]:
-    """Get the status of the latest build filter on the image_name.
+def _get_build_request_filter(*, image_name: str, tags: list[str]) -> str:
+    # To filter builds by multiple tags, use "AND", "OR", or "NOT" to list tags.
+    # Example: '(tags = tag1 AND tags = tag2) OR results.images.name="image"',
+    filter_by_tag = ""
+    if tags:
+        filter_by_tag = "(" + " AND ".join(f"tags = {tag}" for tag in tags) + ")" + " OR "
+    filter_by_image = f'results.images.name="{image_name}"'
+    return filter_by_tag + filter_by_image
+
+
+def get_cloud_build_status(
+    *, project_id: str, image_name: str, tags: list[str]
+) -> Optional[CloudBuildStatus]:
+    """Gets the status of the latest build by filtering on the build tags or image name.
+
+    Args:
+        project_id: The GCP project ID.
+        image_name: The image name including the image path of the Artifact Registry.
+        tags: A list of the CloudBuild build tags. Note that these are not docker image tags.
 
     Returns:
         CloudBuild status for the latest build if exist.
@@ -75,12 +93,12 @@ def get_cloud_build_status(project_id: str, image_name: str) -> Optional[CloudBu
         client = cloudbuild_v1.CloudBuildClient()
         request = cloudbuild_v1.ListBuildsRequest(
             project_id=project_id,
-            filter=f'results.images.name="{image_name}"',
+            filter=_get_build_request_filter(image_name=image_name, tags=tags),
         )
-
         builds = list(client.list_builds(request=request))
+
         if not builds:
-            logging.error("No builds found for image name: %s.", image_name)
+            logging.warning("No builds found for image name: %s.", image_name)
             return None
 
         builds.sort(key=lambda build: build.create_time)

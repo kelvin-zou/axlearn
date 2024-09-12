@@ -3,11 +3,11 @@
 """Autoregressive decoder model, e.g. as seen in the GPT family."""
 import math
 import re
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Callable, Optional, Union
 
 from absl import logging
 from jax import numpy as jnp
-from jax.experimental.maps import thread_resources
+from jax._src.mesh import thread_resources
 from jax.sharding import PartitionSpec
 
 from axlearn.common.attention import (
@@ -54,11 +54,11 @@ class Model(BaseModel):
         z_loss_scale: float = 0.0
         # Batch mesh axis name(s).
         # These will be used to constrain the batch (first) axis of relevant inputs.
-        batch_axis_names: Tuple[str] = ("data",)
+        batch_axis_names: tuple[str] = ("data",)
         # Sequence-parallel mesh axis name(s).
         # These will be used to constrain the sequence axis of relevant inputs.
         # If None, no batch sequence dim constraints are applied.
-        seq_axis_names: Optional[Tuple[str]] = None
+        seq_axis_names: Optional[tuple[str]] = None
         # If not None, collect Tensors from `module_outputs` whose paths fully match the regular
         # expression and compute the sum as the auxiliary loss, which will be added to the overall
         # model loss and reported in the summary as `aux_loss`.
@@ -90,7 +90,7 @@ class Model(BaseModel):
         self,
         input_batch: NestedTensor,
         return_aux: bool = False,
-    ) -> Tuple[Tensor, NestedTensor]:
+    ) -> tuple[Tensor, NestedTensor]:
         """Produce decoder-only loss and predictions including logits and decoder hidden states in
         auxiliary outputs.
 
@@ -106,7 +106,7 @@ class Model(BaseModel):
                     Used to provide the number of UTF-8 bytes represented by the target_labels.
                 input_segment_ids: an optional int Tensor of shape [batch_size, seq_len] with
                     unique positive values for different input sequences.
-                positions: An optional int Tensor of shape [batch_size, target_len] with
+                input_positions: An optional int Tensor of shape [batch_size, target_len] with
                     non-negative values representing token position indices.
             return_aux: boolean to determine whether logits and decoder hidden states are returned.
 
@@ -255,7 +255,7 @@ class Model(BaseModel):
         )
         return {k: v for k, v in results.items() if k in ("per_token_loss", "live_targets")}
 
-    def predict(self, input_batch: Dict[str, Tensor]) -> Dict[str, Tensor]:
+    def predict(self, input_batch: dict[str, Tensor]) -> dict[str, Tensor]:
         """Produce decoder logits and hidden states.
 
         Args:
@@ -264,10 +264,6 @@ class Model(BaseModel):
                     Used as decoder input ids. Values should be in the range [0, vocab_size].
                 token_type_ids: an optional int Tensor of shape [batch_size, seq_len].
                     Values should be in the range [0, type_vocab_size].
-                input_segment_ids: an optional int Tensor of shape [batch_size, seq_len] with
-                    unique positive values for different input sequences.
-                positions: an optional int Tensor of shape [batch_size, seq_len] with non-negative
-                    values representing token position indices.
 
         Returns:
             A dict containing:
@@ -281,8 +277,6 @@ class Model(BaseModel):
         decoder_output = self.decoder(
             input_ids=input_ids,
             token_type_ids=token_type_ids,
-            input_segment_ids=input_batch.get("input_segment_ids"),
-            positions=input_batch.get("positions"),
         )
         return decoder_output
 
@@ -291,7 +285,7 @@ class Model(BaseModel):
         logits: Tensor,
         target_labels: Tensor,
         target_num_bytes: Optional[Tensor],
-    ) -> Dict[str, Tensor]:
+    ) -> dict[str, Tensor]:
         live_targets = (target_labels != self.decoder.config.pad_token_id) & (target_labels >= 0)
         num_targets = live_targets.sum()
         accuracy = (
@@ -344,8 +338,6 @@ class Model(BaseModel):
                 "target_labels",
                 "token_type_ids",
                 "prefix",
-                "input_segment_ids",
-                "positions",
             ]:
                 assert v.ndim == 2
                 input_batch[k] = with_sharding_constraint(
@@ -364,7 +356,12 @@ class Model(BaseModel):
         regex = self.config.aux_loss_regex
         # Collect aux_loss from all leaves.
         module_outputs = self.get_module_outputs()
-        return sum(v.sum() for k, v in flatten_items(module_outputs) if re.fullmatch(regex, k))
+        accumulation = list(
+            v.mean() for k, v in flatten_items(module_outputs) if re.fullmatch(regex, k)
+        )
+        if accumulation:
+            return sum(accumulation) / len(accumulation)
+        return 0
 
 
 TransformerStackConfig = Union[

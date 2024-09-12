@@ -2,7 +2,7 @@
 
 """Decoder layers."""
 import contextlib
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Callable, Optional, Union
 
 import jax
 from jax import numpy as jnp
@@ -91,12 +91,8 @@ def _segment_ids_from_causal_input_ids(input_ids: Tensor, *, pad_token_id: int) 
         A Tensor of shape [..., seq_len] with values in [0,1].
     """
     non_pad_indicator = (input_ids != pad_token_id).astype(input_ids.dtype)
-    non_pad_count = jnp.sum(
-        # Note: jax.lax.cummax doesn't support axis=-1.
-        jax.lax.cummax(non_pad_indicator, axis=input_ids.ndim - 1, reverse=True),
-        axis=-1,
-    )
-    return jnp.arange(input_ids.shape[-1]) < non_pad_count[:, None]
+    # Note: jax.lax.cummax doesn't support axis=-1.
+    return jax.lax.cummax(non_pad_indicator, axis=input_ids.ndim - 1, reverse=True)
 
 
 def _scores_from_logits(
@@ -146,7 +142,7 @@ class DecodingMixin(Module):
         input_ids: Tensor,
         cross_attention_data: Optional[Tensor] = None,
         cross_attention_logit_biases: Optional[Tensor] = None,
-    ) -> Tuple[NestedTensor, NestedTensor]:
+    ) -> tuple[NestedTensor, NestedTensor]:
         """Initializes cache for autoregressive cached decoding.
 
         TODO(markblee): Rename to init_states once we add support for decoding at non-zero time
@@ -177,7 +173,7 @@ class DecodingMixin(Module):
         input_ids: Tensor,
         cross_attention_data: Optional[Tensor] = None,
         cross_attention_logit_biases: Optional[Tensor] = None,
-    ) -> Tuple[NestedTensor, NestedTensor]:
+    ) -> tuple[NestedTensor, NestedTensor]:
         """Computes incremental outputs during autoregressive decoding.
 
         Args:
@@ -212,7 +208,8 @@ class DecodingMixin(Module):
 
         Args:
             prefix: The prefix to use for prompting. A Tensor of shape [batch, max_prefix_length].
-                The prefix for each example in the batch should begin with the [BOS] token.
+                The prefix for each example in the batch should begin with a prompt token (e.g.
+                BOS).
             max_sequence_length: The maximum sequence length of tokens to generate.
             num_decodes: The number of decoded sequences to return. These are the number of
                 hypotheses per batch example.
@@ -270,6 +267,8 @@ class DecodingMixin(Module):
 
         Args:
             prefix: The prefix to use for prompting. Of shape [batch, max_prefix_length].
+                The prefix for each example in the batch should begin with a prompt token (e.g.
+                BOS).
             max_sequence_length: The maximum sequence length of tokens to generate.
             num_decodes: The number of decoded sequences to return.
                 These are the number of hypotheses per batch example.
@@ -303,11 +302,11 @@ class DecodingMixin(Module):
             cross_attention_logit_biases=cross_attention_logit_biases,
         )
         init_scores = _scores_from_logits(init_outputs["logits"], logits_modifier=logits_modifier)
-        # Extract scores corresponding to prefix tokens.
+        # Extract scores corresponding to prefix tokens. Since each sequence in input_ids starts
+        # with the [BOS] token, shift them so they line up with the scores of the output tokens.
+        score_indices = jnp.roll(input_ids[:, :, None], shift=-1)
         # [batch_size, seq_len, vocab_size] --> [batch_size, seq_len].
-        init_scores = jnp.squeeze(
-            jnp.take_along_axis(init_scores, input_ids[:, :, None], axis=-1), axis=-1
-        )
+        init_scores = jnp.squeeze(jnp.take_along_axis(init_scores, score_indices, axis=-1), axis=-1)
         return sample_decode(
             inputs=input_ids,
             time_step=time_step,
@@ -329,7 +328,7 @@ class DecodingMixin(Module):
         cross_attention_data: Optional[Tensor] = None,
         cross_attention_logit_biases: Optional[Tensor] = None,
         logits_modifier: Optional[LogitsToLogitsFn] = None,
-    ) -> Callable[[Tensor, NestedTensor], Tuple[Tensor, NestedTensor]]:
+    ) -> Callable[[Tensor, NestedTensor], tuple[Tensor, NestedTensor]]:
         """Build a fn mapping current token IDs and model state to next logits and updated state."""
 
         if cross_attention_data is not None:
@@ -344,7 +343,7 @@ class DecodingMixin(Module):
             if cross_attention_logit_biases.ndim == 3:
                 cross_attention_logit_biases = cross_attention_logit_biases[:, None, ...]
 
-        def tokens_to_scores(token_ids: Tensor, cache: NestedTensor) -> Tuple[Tensor, NestedTensor]:
+        def tokens_to_scores(token_ids: Tensor, cache: NestedTensor) -> tuple[Tensor, NestedTensor]:
             """Maps current token IDs and model state to next logits and updated state.
 
             Args:
@@ -436,7 +435,7 @@ class Decoder(DecodingMixin, BaseLayer):
         pad_token_id: int = 0  # Int ID of the inputs to be masked for self-attention.
         eos_token_id: int = 1  # Int ID of the end of sequence token id.
         # Specifies how to partition the output logits of shape [batch, max_seq_len, vocab_size].
-        logits_partition_spec: Tuple[Union[Optional[str], Tuple[Optional[str]]], ...] = (
+        logits_partition_spec: tuple[Union[Optional[str], tuple[Optional[str]]], ...] = (
             "data",
             None,
             "model",
@@ -473,7 +472,7 @@ class Decoder(DecodingMixin, BaseLayer):
         cross_attention_logit_biases: Optional[Tensor] = None,
         positions: Optional[Tensor] = None,
         cached_states: Optional[NestedTensor] = None,
-    ) -> Tuple[Optional[NestedTensor], Tensor]:
+    ) -> tuple[Optional[NestedTensor], Tensor]:
         x = self.emb(inputs=input_ids, token_type_ids=token_type_ids, positions=positions)
         if mode == ForwardMode.FORWARD:
             transformer_state, x = None, self.transformer(
@@ -528,7 +527,7 @@ class Decoder(DecodingMixin, BaseLayer):
         cross_attention_data: Optional[Tensor] = None,
         cross_attention_logit_biases: Optional[Tensor] = None,
         positions: Optional[Tensor] = None,
-    ) -> Dict[str, Tensor]:
+    ) -> dict[str, Tensor]:
         """Computes decoder hidden states and logits from input ids and cross attention hidden
         states.
 
@@ -589,7 +588,7 @@ class Decoder(DecodingMixin, BaseLayer):
         input_ids: Tensor,
         cross_attention_data: Optional[Tensor] = None,
         cross_attention_logit_biases: Optional[Tensor] = None,
-    ) -> Tuple[NestedTensor, NestedTensor]:
+    ) -> tuple[NestedTensor, NestedTensor]:
         """See `DecodingMixin.prefill_states`."""
         states, outputs = self._forward_for_mode(
             mode=ForwardMode.INIT_STATES,
@@ -610,7 +609,7 @@ class Decoder(DecodingMixin, BaseLayer):
         input_ids: Tensor,
         cross_attention_data: Optional[Tensor] = None,
         cross_attention_logit_biases: Optional[Tensor] = None,
-    ) -> Tuple[NestedTensor, NestedTensor]:
+    ) -> tuple[NestedTensor, NestedTensor]:
         """See `DecodingMixin.extend_step`."""
         time_step = cached_states["time_step"]
         assert time_step.ndim == 1
@@ -624,27 +623,22 @@ class Decoder(DecodingMixin, BaseLayer):
         updated_inputs = cached_inputs * (1 - oh_indices) + input_ids * oh_indices
 
         # Compute self-attention-mask logit biases. [B, N, T, T].
-        if "attention_mask" in self.children:
-            self_attention_biases = self.compute_attention_logit_biases(
-                updated_inputs,
-                segment_ids=jnp.ones_like(updated_inputs),
-                positions=jnp.arange(target_len)[None, :],
-            )
-            # Select logit biases corresponding to time step. [B, N, 1, T].
-            # Note: if `time_step` exceeds `target_len`, e.g. in the case where one decode starts
-            # at a later index than another, clip the indices instead of producing NaNs.
-            # TODO(markblee): Update attention masks to support explicit positions, so we can
-            # skip this.
+        self_attention_biases = self.compute_attention_logit_biases(
+            updated_inputs,
+            segment_ids=jnp.ones_like(updated_inputs),
+            positions=jnp.arange(target_len)[None, :],
+        )
+        # Select logit biases corresponding to time step. [B, N, 1, T].
+        # Note: if `time_step` exceeds `target_len`, e.g. in the case where one decode starts at a
+        # later index than another, clip the indices instead of producing NaNs.
+        # TODO(markblee): Update attention masks to support explicit positions, so we can skip this.
+        if self_attention_biases is not None:
             self_attention_biases = jnp.take_along_axis(
                 self_attention_biases,
                 time_step[:, None, None, None],
                 axis=2,
                 mode="clip",
             )
-        else:
-            # When attention_mask is not configured, the MHA implementation should handle
-            # causal masking internally instead of relying on attention logit biases.
-            self_attention_biases = None
 
         updated_states, outputs = self._forward_for_mode(
             mode=ForwardMode.EXTEND_STEP,
@@ -691,17 +685,12 @@ class Decoder(DecodingMixin, BaseLayer):
             or None if cfg.attention_mask is None.
 
         Raises:
-            ValueError: If attention_mask is None but segment_ids is provided.
             ValueError: If segment_ids and positions are not both provided, or both omitted.
         """
         if "attention_mask" not in self.children:
-            if segment_ids is not None or positions is not None:
-                raise ValueError(
-                    "attention_mask must be set when segment_ids or positions is provided."
-                )
             return None
         if (segment_ids is None) != (positions is None):
-            raise ValueError("segment_ids and positions must be provided together.")
+            raise ValueError("segment_ids and positions must be provided together")
         cfg = self.config
         if segment_ids is None or positions is None:
             segment_ids = _segment_ids_from_causal_input_ids(
@@ -726,7 +715,7 @@ class LmHead(BaseLayer):
         cfg.param_partition_spec = (None, "model")
         return cfg
 
-    def _create_layer_parameter_specs(self) -> Dict[str, ParameterSpec]:
+    def _create_layer_parameter_specs(self) -> dict[str, ParameterSpec]:
         # Some similarity with Embedding.
         # pylint: disable=duplicate-code
         cfg = self.config

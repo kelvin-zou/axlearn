@@ -34,6 +34,7 @@ in RedirectToSharedModule). It will then wrap the method via
 This allows MyModule's parents to invoke `do_foo` as `self.my_child.do_foo(...)` without having
 to create the child context explicitly.
 """
+
 import contextlib
 import copy
 import dataclasses
@@ -43,8 +44,9 @@ import inspect
 import os.path
 import re
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple, TypeVar, Union
+from typing import Any, Callable, NamedTuple, Optional, TypeVar, Union
 
 import jax
 import numpy as np
@@ -238,7 +240,7 @@ class InvocationContext:  # pylint: disable=too-many-instance-attributes
         """
         if "parent" in override_kwargs:
             raise ValueError("Overriding parent is not allowed")
-        kwargs = {}  # type: Dict[str, Any]
+        kwargs = {}  # type: dict[str, Any]
         for field in dataclasses.fields(self):
             k = field.name
             if k in override_kwargs:
@@ -365,14 +367,14 @@ class InvocationContext:  # pylint: disable=too-many-instance-attributes
 class ContextStack(threading.local):
     """See `install_context_stack` on how to ensure thread-safety of the global stack."""
 
-    stack: List[InvocationContext]
+    stack: list[InvocationContext]
     thread_id: int
 
 
 _global_context_stack = ContextStack(stack=[], thread_id=threading.get_ident())
 
 
-def clone_context_stack() -> List[InvocationContext]:
+def clone_context_stack() -> list[InvocationContext]:
     """Returns a copy of the current InvocationContext stack.
 
     This is often used together with `install_context_stack` to ensure that different threads
@@ -381,7 +383,7 @@ def clone_context_stack() -> List[InvocationContext]:
     return list(_global_context_stack.stack)
 
 
-def install_context_stack(stack: List[InvocationContext]):
+def install_context_stack(stack: list[InvocationContext]):
     """Installs the given context stack.
 
     `install_context_stack` should be called in every child thread to ensure that each thread
@@ -493,7 +495,38 @@ def _call_method_in_context(
     return call_thunk_in_context(list(reversed(context.module.path_to_descendant_module(module))))
 
 
-class Module(Configurable):
+class _PostInitMeta(type):
+    """A metaclass that invokes `__post_init__`."""
+
+    def __call__(cls, *args: Any, **kwds: Any) -> Any:
+        instance = super().__call__(*args, **kwds)
+        maybe_post_init = getattr(instance, "__post_init__", None)
+        if callable(maybe_post_init):
+            maybe_post_init()
+        return instance
+
+
+def _wrap_method_with_auto_child_context(*, method_fn: Callable, method_name: str) -> Callable:
+    """Wraps a method by proxying through `_call_method_in_context`.
+
+    Note that this does not bind any instance to the `self` parameter of the method.
+    We keep this function separate from a `Module` method to avoid confounding the `self` argument
+    of this function with the `self` argument in `wrap_method_fn`.
+
+    Callers of this function should either bind the returned function to an instance, e.g. using
+    `partial(method_fn, instance)`, or supply an instance explicitly as the first arg.
+    """
+
+    @no_stack_summary
+    def wrap_method_fn(self, *args, method_fn=method_fn, **kwargs):
+        return _call_method_in_context(
+            self, *args, method_fn=method_fn, method_name=method_name, **kwargs
+        )
+
+    return wrap_method_fn
+
+
+class Module(Configurable, metaclass=_PostInitMeta):
     """A node in a tree of Modules."""
 
     @config_class
@@ -513,23 +546,53 @@ class Module(Configurable):
         cfg = self.config
         self._name = cfg.name
         self._parent = parent  # Avoid adding parent to self._modules.
-        self._children: Dict[str, "Module"] = {}
+        self._children: dict[str, "Module"] = {}
         # Mapping from descendant module name to relative path from current module.
-        self._paths_to_shared_modules: Dict[str, List[str]] = {}
+        self._paths_to_shared_modules: dict[str, list[str]] = {}
         self._vlog_level = cfg.vlog
-        # TODO(markblee): Consider using a metaclass.
+
+    def __post_init__(self):
+        # Wrap methods after `__init__`, allowing access to child modules.
+        for method_name, method_fn in self._wrapped_methods_for_auto_child_context().items():
+            setattr(self, method_name, method_fn)
+
+    def _wrapped_methods_for_auto_child_context(self) -> dict[str, Callable]:
+        """Returns methods that have been wrapped and bound to `self`.
+
+        This ensures that module methods are bound to the instance that defined the method, rather
+        than the instance that the method is assigned to in `__post_init__`.
+
+        For example, `self.child._wrapped_methods_for_auto_child_context()` returns methods bound to
+        `self.child` rather than `self`, which affects what `self.config` points to within the
+        wrapped method.
+
+        On the other hand, `self.child._methods_to_wrap_for_auto_child_context()` returns un-bound
+        methods of `self.child`. Subclasses will typically override this method to control which
+        methods of the subclass to wrap.
+        """
+        wrapped = {}
+
         for method_name, method_fn in self._methods_to_wrap_for_auto_child_context().items():
             # method_fn is not bound to any instance.
             self.vlog(1, "Wrapping method %s of %s with auto child context", method_name, self)
             # Wrap method with automatic child context.
-            method_fn = self._wrap_method_with_auto_child_context(
+            method_fn = _wrap_method_with_auto_child_context(
                 method_fn=method_fn, method_name=method_name
             )
             # Bind method_fn to self and override self.<method>.
-            method_fn = partial_with_fn_metadata(method_fn, self)
-            setattr(self, method_name, method_fn)
+            wrapped[method_name] = partial_with_fn_metadata(method_fn, self)
 
-    def _methods_to_wrap_for_auto_child_context(self) -> Dict[str, Callable]:
+        return wrapped
+
+    def _methods_to_wrap_for_auto_child_context(self) -> dict[str, Callable]:
+        """Returns methods to be wrapped in `_wrapped_methods_for_auto_child_context`.
+
+        These methods should not be bound to any instance (i.e., `self` should be left as a required
+        first argument to the returned methods). Such a binding instead happens in
+        `_wrapped_methods_for_auto_child_context`, which is invoked automatically in
+        `__post_init__`.
+        """
+
         def _should_wrap_method(method: str) -> bool:
             # Only public methods defined in subclasses of Module need to be wrapped.
             if hasattr(Module, method) or method.startswith("_"):
@@ -547,15 +610,6 @@ class Module(Configurable):
             for method in dir(self)
             if _should_wrap_method(method)
         }
-
-    def _wrap_method_with_auto_child_context(self, *, method_fn, method_name):
-        @no_stack_summary
-        def wrap_method_fn(self, *args, method_fn=method_fn, **kwargs):
-            return _call_method_in_context(
-                self, *args, method_fn=method_fn, method_name=method_name, **kwargs
-            )
-
-        return wrap_method_fn
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
@@ -651,7 +705,7 @@ class Module(Configurable):
         self._children[name] = module
         return module
 
-    def path_to_descendant_module(self, module: "Module") -> Optional[List[str]]:
+    def path_to_descendant_module(self, module: "Module") -> list[str]:
         """Returns the relative path from `self` to `module`.
 
         Args:
@@ -667,9 +721,10 @@ class Module(Configurable):
         while module is not None and module is not self:
             relative_path.append(module.name)
             module = module.parent
+        path = list(reversed(relative_path))
         if module is None:
-            raise ValueError(f"Module {module.path()} is not a descendant of {self.path()}")
-        return list(reversed(relative_path))
+            raise ValueError(f"Module at {'.'.join(path)} is not a descendant of {self.path()}")
+        return path
 
     def _share_with_descendants(self, module: "Module", *, shared_module_name: str):
         """Share `module` with self's descendant modules.
@@ -758,7 +813,7 @@ class Module(Configurable):
         return context
 
     @property
-    def children(self) -> Dict[str, "Module"]:
+    def children(self) -> dict[str, "Module"]:
         return self._children
 
     @property
@@ -838,7 +893,7 @@ class _Functional:
     # Whether to require that context.parent is current_context().
     require_parent: bool = struct.field(pytree_node=False)
 
-    def __call__(self, *args, **kwargs) -> Tuple[Any, OutputCollection]:
+    def __call__(self, *args, **kwargs) -> tuple[Any, OutputCollection]:
         """Invokes method_fn in a pure functional fashion.
 
         The invocation will not depend on external inputs or have any side effects. The results only
@@ -877,12 +932,12 @@ def functional(
     module: Module,
     prng_key: Optional[Tensor],
     state: NestedTensor,
-    inputs: Union[Sequence[Any], Dict[str, Any]],
+    inputs: Union[Sequence[Any], dict[str, Any]],
     *,
     method: str = "forward",
     is_training: bool,
     drop_output_collections: Sequence[str] = ("module_outputs",),
-) -> Tuple[Any, OutputCollection]:
+) -> tuple[Any, OutputCollection]:
     """Invokes <module>.<method> in a pure functional fashion.
 
     The invocation will not depend on external inputs or have any side effects. The results only
@@ -942,7 +997,7 @@ def scan_in_context(
     xs: NestedTensor,
     drop_output: Optional[Callable[[str], bool]] = None,
     child_name_prefix: str = "iter",
-) -> Tuple[NestedTensor, NestedTensor]:
+) -> tuple[NestedTensor, NestedTensor]:
     """A thin wrapper around `jax.lax.scan` which is compatible with `OutputCollection`.
 
     In particular, summaries and outputs added by `add_summary` and `add_module_output` respectively
