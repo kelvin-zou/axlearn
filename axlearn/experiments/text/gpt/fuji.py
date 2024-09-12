@@ -13,13 +13,10 @@ The fuji models are set up to imitate LLaMA models:
 import enum
 import functools
 import itertools
-<<<<<<< HEAD
 from typing import Any, Callable, Dict, Optional, Union
 
 from jax.ad_checkpoint import checkpoint_policies as jax_remat_policies
-=======
 from typing import Any, Callable, Literal, Optional, Union
->>>>>>> main
 
 from axlearn.common import causal_lm, config
 from axlearn.common.attention import (
