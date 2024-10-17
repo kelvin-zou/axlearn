@@ -43,6 +43,8 @@ core = [
     "aqtp==0.4.0", # aqtp>=0.5.0 requires python>=3.10 due to the use of Union shorthand "|" in type hints.
     "flax==0.8.5", # for AQT, param converter and adapter.
     "prefixed==0.7.1", # For formatting file sizes, param counts, etc.
+    "tpu-info==0.2.0", # For TPU monitoring from libtpu. https://github.com/AI-Hypercomputer/cloud-accelerator-diagnostics/tree/main/tpu_info
+    "prometheus-client==0.21.0", # For TPU monitoring from tpu-device-plugin.
 ]
 # Apple Silicon dependencies.
 # Need to run `conda install -c apple tensorflow-deps` separately.

@@ -11,6 +11,11 @@ from absl import flags, logging
 
 from axlearn.common import file_system as fs
 from axlearn.common import measurement
+from axlearn.common.monitoring.device_mon import (
+    DeviceMonitor,
+    DeviceMonitorClient,
+    TpuMonitorClient,
+)
 from axlearn.common.trainer import SpmdTrainer, select_mesh_config
 from axlearn.common.utils import MeshShape, get_data_dir, infer_mesh_shape
 from axlearn.experiments import TrainerConfigFn, get_named_trainer_config
@@ -53,6 +58,21 @@ flags.DEFINE_integer(
     "Timeout for the trainer watchdog in seconds. "
     "If the trainer.step does not increment within this interval, "
     "the watchdog will log the stack traces of all threads.",
+)
+flags.DEFINE_integer(
+    "trainer_watchdog_fast_timeout_seconds",
+    600,
+    "Fast timeout for the trainer watchdog in seconds. "
+    "If the trainer.step does not increment within this interval, "
+    "and the node is already in idle state, "
+    "the watchdog will log the stack traces of all threads.",
+)
+flags.DEFINE_bool(
+    "enable_device_monitor",
+    False,
+    "Whether to enable the device monitor. "
+    "The device monitor collects the system metrics and logs them periodically."
+    "The device monitor also logs the idle status of the devices on the host.",
 )
 flags.DEFINE_string(
     "mesh_selector",
@@ -100,7 +120,21 @@ def get_trainer_config(
     trainer_config.start_trace_steps = [int(el) for el in flag_values.trace_at_steps]
     if trainer_config.watchdog_timeout_seconds is None:
         trainer_config.watchdog_timeout_seconds = flag_values.trainer_watchdog_timeout_seconds
-
+    if (
+        trainer_config.watchdog_fast_timeout_seconds is None
+        and flag_values.trainer_watchdog_fast_timeout_seconds > 0
+    ):
+        trainer_config.watchdog_fast_timeout_seconds = (
+            flag_values.trainer_watchdog_fast_timeout_seconds
+        )
+    if flag_values.enable_device_monitor and os.environ.get("NODE_IP") is not None:
+        device_platform: str = jax.local_devices()[0].platform
+        node_ip: str = os.environ["NODE_IP"]
+        trainer_config.device_monitor = DeviceMonitor.default_config().set(
+            monitor_client_cfg=TpuMonitorClient.default_config()
+            if device_platform == "tpu"
+            else DeviceMonitorClient.default_config().set(addr=f"{node_ip}:2112"),
+        )
     for eval_cfg in trainer_config.evalers.values():
         eval_cfg.trace_at_iters = [int(el) for el in flag_values.eval_trace_at_iters]
 

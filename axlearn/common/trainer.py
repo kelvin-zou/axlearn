@@ -36,6 +36,7 @@ from axlearn.common.learner import Learner
 from axlearn.common.module import InvocationContext, Module, child_context, clone_context_stack
 from axlearn.common.module import functional as F
 from axlearn.common.module import install_context_stack, new_output_collection
+from axlearn.common.monitoring.device_mon import DeviceMonitor
 from axlearn.common.optimizer_base import NestedOptParam, OptParam
 from axlearn.common.param_init import DefaultInitializer
 from axlearn.common.state_builder import Builder as TrainerStateBuilder
@@ -169,6 +170,14 @@ class SpmdTrainer(Module):
         # increment within this interval.
         watchdog_timeout_seconds: Optional[float] = None
 
+        # If > 0, run a watchdog thread to print the thread stack traces if step does not
+        # increment within this interval and detect the host is idle.
+        # watchdog_timeout_seconds should be set to multiple of watchdog_fast_timeout_seconds.
+        watchdog_fast_timeout_seconds: Optional[float] = None
+
+        # Device monitor to check if the devices are idle.
+        device_monitor: Optional[DeviceMonitor.Config] = None
+
         # An optional recorder for measuring common metrics like step time.
         recorder: Optional[InstantiableConfig[measurement.Recorder]] = None
 
@@ -197,6 +206,7 @@ class SpmdTrainer(Module):
         self._jit_train_step: jax.stages.Wrapped = None
         self._watchdog_stopping = None
         self._watchdog_thread = None
+        self._device_monitor = None
         self._recorder = maybe_instantiate(cfg.recorder)
 
         if cfg.model.dtype is None:
@@ -286,6 +296,8 @@ class SpmdTrainer(Module):
                     model=self.model,
                     model_param_partition_specs=model_param_partition_specs,
                 )
+            if cfg.device_monitor is not None:
+                self._device_monitor = maybe_instantiate(cfg.device_monitor)
 
     @property
     def step(self):
@@ -358,22 +370,49 @@ class SpmdTrainer(Module):
     def _watchdog_loop(self, *, context_stack: list[InvocationContext]):
         cfg = self.config
         install_context_stack(context_stack)
+        time_elapsed_in_sec_since_last_check: float = 0.0
+        health_check_interval_in_sec = (
+            cfg.watchdog_timeout_seconds
+            if cfg.watchdog_fast_timeout_seconds is None
+            else cfg.watchdog_fast_timeout_seconds
+        )
         while True:
             last_step = self.step
-            if self._watchdog_stopping.wait(timeout=cfg.watchdog_timeout_seconds):
+            if self._watchdog_stopping.wait(health_check_interval_in_sec):
                 break
             current_step = self.step
             if current_step == last_step:
-                self._step_log(
-                    "Watchdog triggered because step has not incremented in the last %s seconds.\n"
-                    "NOTE: this is not an error message, but meant to help debugging "
-                    "in case the trainer is stuck.\n"
-                    "Threads:\n%s",
-                    cfg.watchdog_timeout_seconds,
-                    "\n".join(itertools.chain.from_iterable(thread_stack_traces())),
-                )
+                time_elapsed_in_sec_since_last_check += health_check_interval_in_sec
+                # When device_monitor is enabled, we can check if the host is idle
+                # and trigger the watchdog proactively.
+                if self._device_monitor is not None:
+                    if self._device_monitor.is_host_idle():
+                        self._step_log(
+                            "Watchdog triggered because step has not incremented in the last %s "
+                            "seconds and the host is idle.\n"
+                            "NOTE: this is not an error message, but meant to help debugging "
+                            "in case the trainer is stuck.\n"
+                            "Threads:\n%s",
+                            time_elapsed_in_sec_since_last_check,
+                            "\n".join(
+                                itertools.chain.from_iterable(thread_stack_traces()),
+                            ),
+                        )
+                        # TODO(kelvin-zou): maybe crash the program here?
+                # Without device_monitor, we still want to log the thread stack traces
+                # when the trainer is stuck at cfg.watchdog_timeout_seconds.
+                elif time_elapsed_in_sec_since_last_check >= cfg.watchdog_timeout_seconds:
+                    self._step_log(
+                        "Watchdog triggered because step has not incremented in the last %s "
+                        "seconds.\n NOTE: this is not an error message, but meant to help "
+                        "debugging in case the trainer is stuck.\n"
+                        "Threads:\n%s",
+                        time_elapsed_in_sec_since_last_check,
+                        "\n".join(itertools.chain.from_iterable(thread_stack_traces())),
+                    )
             else:
                 self.vlog(1, "Watchdog check passed: %s -> %s", last_step, current_step)
+                time_elapsed_in_sec_since_last_check = 0
         logging.info("Watchdog loop done")
 
     def _should_force_run_evals(
