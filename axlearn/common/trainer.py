@@ -485,6 +485,11 @@ class SpmdTrainer(Module):
             the specific `metric_calculator` config of the evaler.
         """
         with (
+            (
+                self._device_monitor.start_monitoring()
+                if self._device_monitor is not None
+                else contextlib.nullcontext()
+            ),
             self._watchdog(),
             self.mesh(),
             jax.log_compiles(self.vlog_is_on(1)),
