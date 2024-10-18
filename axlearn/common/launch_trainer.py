@@ -131,9 +131,9 @@ def get_trainer_config(
         device_platform: str = jax.local_devices()[0].platform
         node_ip: str = os.environ["NODE_IP"]
         trainer_config.device_monitor = DeviceMonitor.default_config().set(
-            monitor_client_cfg=TpuMonitorClient.default_config()
+            monitor_client_cfg=TpuMonitorClient.default_config().set(addr=f"{node_ip}:2112")
             if device_platform == "tpu"
-            else DeviceMonitorClient.default_config().set(addr=f"{node_ip}:2112"),
+            else DeviceMonitorClient.default_config(),
         )
     for eval_cfg in trainer_config.evalers.values():
         eval_cfg.trace_at_iters = [int(el) for el in flag_values.eval_trace_at_iters]
