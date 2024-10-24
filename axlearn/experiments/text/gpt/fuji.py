@@ -252,7 +252,7 @@ def get_trainer_kwargs(
                 num_layers=80,
                 hidden_dim=128 * 64,
                 num_heads=64,
-                ffn_dim=scaled_hidden_dim(scale=3.5, round_up_to_multiples_of=16),
+                # ffn_dim=scaled_hidden_dim(scale=3.5, round_up_to_multiples_of=16),
                 # No GQA support in V1 models, so num_kv_heads is the same as num_heads.
                 num_kv_heads=None if version == Version.V1 else 8,
                 rope_theta=rope_theta,
@@ -293,7 +293,6 @@ def get_trainer_kwargs(
                     mesh_shape_from_axes(data=-1, fsdp=128),
                 ),
                 ("tpu-v5p-(512|1024|2048)", mesh_shape_from_axes(data=-1, fsdp=16, model=8)),
-                
             ),
         )
     else:
