@@ -1433,3 +1433,15 @@ def raise_for_cycles(tree: Any):
             f"Descendant KeyPath: {cycles['descendant']}.\n"
             f"Ancestor KeyPath: {cycles['ancestor']}."
         )
+
+
+@dataclasses.dataclass
+class DeviceUsage:
+    """Usage measurements for a device."""
+
+    device_id: int
+    mem_used_in_bytes: Optional[int] = None
+    mem_total_in_bytes: Optional[int] = None
+    duty_cycle_pct: Optional[float] = None
+    tensorcore_util_pct: Optional[float] = None
+    mem_bw_util_pct: Optional[float] = None
