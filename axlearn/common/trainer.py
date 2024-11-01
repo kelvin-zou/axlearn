@@ -215,6 +215,8 @@ class SpmdTrainer(Module):
         self._watchdog_thread = None
         self._device_monitor = maybe_instantiate(cfg.device_monitor)
         self._recorder = maybe_instantiate(cfg.recorder)
+        self._is_evaluating: bool = False
+        self._is_initialized: bool = False
 
         if cfg.model.dtype is None:
             raise ValueError(f"dtype must be explicitly specified for {self.path()}.model")
@@ -413,9 +415,15 @@ class SpmdTrainer(Module):
                             ),
                         )
                         # Crash the program here to trigger a job restart outside.
-                        # Do not crash during init to avoid spurious restarts.
-                        if current_step != 0:
-                            sys.exit(0)
+                        # Do not crash during eval to avoid spurious restarts.
+                        # Crash after watchdog_timeout_seconds during initialization.
+                        if self._is_initialized:
+                            if not self._is_evaluating:
+                                logging.error("Exit due to no progress during training.")
+                                sys.exit(1)
+                        elif time_elapsed_in_sec_since_last_check >= cfg.watchdog_timeout_seconds:
+                            logging.error("Exit due to no progress during init.")
+                            sys.exit(1)
                 # Without device_monitor, we still want to log the thread stack traces
                 # when the trainer is stuck at cfg.watchdog_timeout_seconds.
                 elif time_elapsed_in_sec_since_last_check >= cfg.watchdog_timeout_seconds:
@@ -522,13 +530,14 @@ class SpmdTrainer(Module):
             if not self._prepare_training(prng_key):
                 return None
 
+            self._is_initialized = True
+
             with self.checkpointer:
                 logging.info("Starting loop...")
                 start_time = time.perf_counter()
                 num_steps = 0
                 output = None
                 stop_trace_step = None
-
                 for input_batch in self.input.batches(self._input_iter):
                     self._maybe_record_event(measurement.Event.START_STEP, self._step)
                     logging.log_first_n(
@@ -979,11 +988,12 @@ class SpmdTrainer(Module):
             )
 
         self.summary_writer(self.step, {"loss": outputs["loss"], **outputs["summaries"]})
-
+        self._is_evaluating = True
         # Aggregate summaries across evalers.
         evaler_summaries = self._run_eval(
             train_summaries=outputs["summaries"], force_runs=force_run_evals
         )
+        self._is_evaluating = False
 
         # Checkpointer policy will decide if we should save.
         self.save_checkpoint(evaler_summaries=evaler_summaries)
