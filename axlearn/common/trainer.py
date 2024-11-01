@@ -413,7 +413,9 @@ class SpmdTrainer(Module):
                             ),
                         )
                         # Crash the program here to trigger a job restart outside.
-                        sys.exit(0)
+                        # Do not crash during init to avoid spurious restarts.
+                        if current_step != 0:
+                            sys.exit(0)
                 # Without device_monitor, we still want to log the thread stack traces
                 # when the trainer is stuck at cfg.watchdog_timeout_seconds.
                 elif time_elapsed_in_sec_since_last_check >= cfg.watchdog_timeout_seconds:
