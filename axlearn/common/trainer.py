@@ -6,6 +6,7 @@ import contextlib
 import itertools
 import math
 import os.path
+import sys
 import threading
 import time
 from collections.abc import Sequence
@@ -411,7 +412,8 @@ class SpmdTrainer(Module):
                                 itertools.chain.from_iterable(thread_stack_traces()),
                             ),
                         )
-                        # TODO(kelvin-zou): maybe crash the program here?
+                        # Crash the program here to trigger a job restart outside.
+                        sys.exit(0)
                 # Without device_monitor, we still want to log the thread stack traces
                 # when the trainer is stuck at cfg.watchdog_timeout_seconds.
                 elif time_elapsed_in_sec_since_last_check >= cfg.watchdog_timeout_seconds:
