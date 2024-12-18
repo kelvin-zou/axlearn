@@ -18,11 +18,24 @@ import jax
 import jax.numpy as jnp
 import pytest
 
+from jax.experimental import mesh_utils
+from jax.experimental.shard_map import shard_map
+from jax.interpreters.pxla import thread_resources
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
+
+from axlearn.common.attention_bias import (
+    MaskFnAttentionBias,
+    ZeroAttentionBias,
+    make_causal_biases,
+    sliding_window_causal_mask,
+)
+
 from axlearn.common.flash_attention.gpu_attention import (
     cudnn_dot_product_attention,
     flash_attention,
 )
 from axlearn.common.flash_attention.utils import mha_reference
+from axlearn.common.test_utils import is_supported_mesh_shape
 
 if jax.default_backend() != "gpu":
     pytest.skip(reason="Incompatible hardware", allow_module_level=True)
@@ -149,18 +162,26 @@ def test_triton_against_xla_ref(
 
     sm_scale = q.shape[-1] ** -0.5
 
+    def fwd_fn(q, k, v, bias, segment_ids):
+        if causal:
+            mask = MaskFnAttentionBias(sliding_window_causal_mask(seq_len), shape=(seq_len, seq_len))
+        else:
+            mask = None
+        fa = lambda q, k, v, bias, segment_ids: flash_attention(q,
+            k,
+            v,
+            bias,
+            segment_ids,
+            mask=mask,
+            causal=causal,
+            softmax_scale=sm_scale,
+            block_q=block_size,
+            block_k=block_size,)
+        return fa(q, k, v, bias, segment_ids)
+    
+    fa = jax.jit(fwd_fn)
     # Compare outputs.
-    jax_out = flash_attention(
-        q,
-        k,
-        v,
-        bias,
-        segment_ids,
-        causal=causal,
-        softmax_scale=sm_scale,
-        block_q=block_size,
-        block_k=block_size,
-    )
+    jax_out = fa(q, k, v, bias, segment_ids)
     jax_ref_out = mha_reference(q, k, v, bias, segment_ids, causal=causal, softmax_scale=sm_scale)
     if input_dtype == jnp.float16:
         chex.assert_trees_all_close(jax_out, jax_ref_out, atol=0.005)
@@ -169,6 +190,7 @@ def test_triton_against_xla_ref(
     else:
         raise ValueError(f"Unsupported dtype: {input_dtype}")
 
+    @jax.jit
     def fn(q, k, v, bias, segment_ids):
         return flash_attention(
             q,
@@ -191,6 +213,82 @@ def test_triton_against_xla_ref(
     jax_grads = jax.grad(fn, argnums=(0, 1, 2))(q, k, v, bias, segment_ids)
     jax_ref_grads = jax.grad(ref_fn, argnums=(0, 1, 2))(q, k, v, bias, segment_ids)
     chex.assert_trees_all_close(jax_grads, jax_ref_grads, atol=0.05)
+
+
+@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("seq_len", [32768])
+@pytest.mark.parametrize("sliding_window_size", [2048])
+@pytest.mark.parametrize("use_segment_ids", [True, False])
+@pytest.mark.parametrize("num_heads", [8])
+@pytest.mark.parametrize("per_head_dim", [128])
+@pytest.mark.parametrize("mesh", [(8, 1)])
+@pytest.mark.parametrize("mesh_axis_names", [("data", "model")])
+def test_sliding_window_mask(
+    batch_size,
+    seq_len,
+    num_heads,
+    per_head_dim,
+    sliding_window_size,
+    use_segment_ids: bool,
+    mesh,
+    mesh_axis_names,
+):
+    if not is_supported_mesh_shape(mesh):
+        pytest.skip(reason=f"Unsupported mesh {mesh}.")
+
+    k1, k2, k3 = jax.random.split(jax.random.PRNGKey(0), 3)
+    q = jax.random.normal(k1, (batch_size, seq_len, num_heads, per_head_dim), dtype=jnp.bfloat16)
+    k = jax.random.normal(k2, (batch_size, seq_len, num_heads, per_head_dim), dtype=jnp.bfloat16)
+    v = jax.random.normal(k3, (batch_size, seq_len, num_heads, per_head_dim), dtype=jnp.bfloat16)
+    segment_left = jnp.ones((batch_size, seq_len // 2), dtype=jnp.int32)
+    segment_right = jnp.zeros((batch_size, seq_len // 2), dtype=jnp.int32)
+    segment_ids = (
+        jnp.concatenate([segment_left, segment_right], axis=-1) if use_segment_ids else None
+    )
+
+    with Mesh(mesh_utils.create_device_mesh(mesh), mesh_axis_names):
+        mesh = thread_resources.env.physical_mesh
+
+        def fn(q, k, v):
+            q = jax.lax.with_sharding_constraint(
+                q, NamedSharding(mesh, PartitionSpec("data", None, "model", None))
+            )
+            k = jax.lax.with_sharding_constraint(
+                k, NamedSharding(mesh, PartitionSpec("data", None, "model", None))
+            )
+            v = jax.lax.with_sharding_constraint(
+                v, NamedSharding(mesh, PartitionSpec("data", None, "model", None))
+            )
+
+            softmax_scale = q.shape[-1] ** -0.5
+            mask = MaskFnAttentionBias(
+                    sliding_window_causal_mask(sliding_window_size), shape=(seq_len, seq_len)
+                )
+
+            attn = lambda q, k, v: flash_attention(
+                q, k, v, segment_ids=segment_ids, mask=mask, softmax_scale=softmax_scale
+            )
+
+            partitioned_mha = shard_map(
+                attn,
+                mesh=mesh,
+                in_specs=(
+                    PartitionSpec("data", None, "model", None),
+                    PartitionSpec("data", None, "model", None),
+                    PartitionSpec("data", None, "model", None),
+                ),
+                out_specs=PartitionSpec("data", None, "model", None),
+                check_rep=False,
+            )
+
+            return partitioned_mha(q, k, v)
+
+        fn = jax.jit(fn)
+
+    # Trigger compilation.
+    fn(q, k, v)
+    # Trigger a run
+    fn(q, k, v)
 
 
 # We test the cudnn_dot_product_attention against the reference flash_attention.
