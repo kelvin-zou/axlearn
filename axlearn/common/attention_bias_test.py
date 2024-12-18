@@ -6,7 +6,7 @@ from typing import Optional
 import chex
 import jax.numpy as jnp
 import jax.util
-from absl.testing import parameterized
+from absl.testing import absltest, parameterized
 from jax.sharding import PartitionSpec
 
 from axlearn.common import attention_bias, test_utils
@@ -267,6 +267,45 @@ class AttentionBiasTest(test_utils.TestCase):
         expected = attention_bias.bool_to_bias(expected)[:, None, :]
         self.assertNestedEqual(bias.value(), expected)
 
+    def test_mask_fn_attention_bias_target_positions_ndim(self):
+        """Tests mask_fn_attention_bias` when `target_positions.ndim == 2."""
+        bias = attention_bias.MaskFnAttentionBias(
+            mask=attention_bias.causal_mask,
+            shape=(5, 5),
+            target_positions=jnp.asarray([[0, 1, 2, 3, 4], [4, 3, 2, 1, 0]]),
+        )
+        expected = jnp.asarray(
+            [
+                [
+                    attention_bias.causal_mask(*jnp.indices([5, 5])),
+                ],
+                [
+                    attention_bias.causal_mask(*jnp.indices([5, 5]))[::-1, :],
+                ],
+            ],
+            dtype=bool,
+        )
+        self.assertNestedEqual(bias.bool_value(), expected)
+
+    def test_mask_fn_attention_bias_with_target_positions(self):
+        # Ensure that MaskFnAttentionBias provides the mask_fn callback with target_positions and
+        # source_positions tensors of the same rank.
+        batch, target_len, source_len = 2, 5, 4
+        time_step = jnp.arange(batch)
+
+        def mask_fn(target_positions, source_positions):
+            self.assertEqual(target_positions.shape, (batch, target_len, 1))
+            self.assertEqual(source_positions.shape, (1, 1, source_len))
+            return attention_bias.causal_mask(target_positions, source_positions)
+
+        bias = attention_bias.MaskFnAttentionBias(
+            mask=mask_fn, shape=(target_len, source_len), target_positions=time_step
+        )
+        ref_bias = attention_bias.MaskFnAttentionBias(
+            attention_bias.causal_mask, shape=(target_len, source_len), target_positions=time_step
+        )
+        chex.assert_trees_all_close(bias.value(), ref_bias.value())
+
     def test_bool_tensor_attention_bias(self):
         bias = attention_bias.BoolTensorAttentionBias.from_tensor(jnp.ones((5, 7), dtype=bool))
         self.assertNestedEqual(
@@ -278,3 +317,7 @@ class AttentionBiasTest(test_utils.TestCase):
         self.assertEqual(bias.value().dtype, jnp.float32)
         bias = bias.astype(jnp.bfloat16)
         self.assertEqual(bias.value().dtype, jnp.bfloat16)
+
+
+if __name__ == "__main__":
+    absltest.main()
