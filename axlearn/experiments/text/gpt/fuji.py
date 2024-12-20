@@ -19,6 +19,7 @@ from jax.ad_checkpoint import checkpoint_policies as jax_remat_policies
 
 from axlearn.common import causal_lm, config
 from axlearn.common.attention import (
+    SELF_ATTENTION_SAVE_PATTERN,
     BaseStackedTransformerLayer,
     FusedGroupedQKVLinear,
     FusedQKVLinear,
@@ -133,6 +134,15 @@ def get_trainer_kwargs(
     offload_dots_saveable_policy = config_for_function(
         extended_checkpoint_policies.offload_dots_saveable
     ).set(offload_src="device", offload_dst="pinned_host")
+
+    save_attention_proj_policy = config_for_function(
+        extended_checkpoint_policies.save_and_offload_only_these_names_regex
+    ).set(
+        names_which_can_be_saved=SELF_ATTENTION_SAVE_PATTERN,
+        names_which_can_be_offloaded=None,
+        offload_src="device",
+        offload_dst="pinned_host",
+    )
     # dict() is more readable here.
     # pylint: disable=use-dict-literal
     if model_size == "test":
@@ -405,6 +415,24 @@ def get_trainer_kwargs(
                                     "model.decoder.transformer.layer": RematSpec(
                                         prevent_cse=True,
                                         policy=offload_dots_saveable_policy,
+                                    ),
+                                }
+                            ),
+                        ],
+                    ),
+                ),
+                (
+                    "tpu-v6e-256-(4|8)",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256)
+                            ),
+                            RematSpecModifier.default_config().set(
+                                remat_policies={
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=True,
+                                        policy=save_attention_proj_policy,
                                     ),
                                 }
                             ),
