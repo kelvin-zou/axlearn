@@ -56,7 +56,6 @@ On `segment_ids`:
 import enum
 import functools
 import math
-import re
 from collections.abc import Sequence
 from enum import Enum, unique
 from typing import Any, Callable, NamedTuple, Optional, Protocol, Union
@@ -64,8 +63,6 @@ from typing import Any, Callable, NamedTuple, Optional, Protocol, Union
 import einops
 import jax
 from jax import numpy as jnp
-from jax._src.ad_checkpoint import name_p
-from jax._src.interpreters import partial_eval as pe
 
 from axlearn.common import ops, param_init
 from axlearn.common.attention_bias import (
@@ -126,7 +123,6 @@ from axlearn.common.utils import (
     TensorSpec,
     VDict,
     check_numerics,
-    extended_checkpoint_policies,
     flatten_items,
     get_or_none,
     save_and_offload_only_these_names_regex,
@@ -3945,7 +3941,10 @@ def _save_and_offload_only_these_names_regex(
     offload_dst: str,
 ) -> OffloadPolicy:
     return save_and_offload_only_these_names_regex(
-        names_which_can_be_saved, names_which_can_be_offloaded, offload_src, offload_dst
+        names_which_can_be_saved=names_which_can_be_saved,
+        names_which_can_be_offloaded=names_which_can_be_offloaded,
+        offload_src=offload_src,
+        offload_dst=offload_dst,
     )
 
 

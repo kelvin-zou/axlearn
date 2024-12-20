@@ -127,7 +127,8 @@ def save_and_offload_only_these_names_regex(
         offload_dst: The target device for offloading.
 
     Returns:
-        A policy function that offloads and saves only the tensors that match the given regex patterns.
+        A policy function that offloads and saves only the tensors that match the given
+        regex patterns.
     """
 
     def policy(prim, *_, **params):
