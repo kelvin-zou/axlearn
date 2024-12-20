@@ -174,7 +174,7 @@ def test_triton_against_xla_ref(
         block_q=block_size,
         block_k=block_size,
     )
-    jax_ref_out = mha_reference(q, k, v, bias, segment_ids, causal=causal, softmax_scale=sm_scale)
+    jax_ref_out = mha_reference(q, k, v, bias, segment_ids, causal=causal, softmax_scale=softmax_scale)
     if input_dtype == jnp.float16:
         chex.assert_trees_all_close(jax_out, jax_ref_out, atol=0.005)
     elif input_dtype == jnp.float32:
