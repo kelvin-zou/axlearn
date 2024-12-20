@@ -108,6 +108,13 @@ TOTAL_TOKENS = {
     },
 }
 
+# Llama3 uses 16m tokens after 2.87T tokens.
+# https://arxiv.org/pdf/2407.21783
+TOKENS_PER_BATCH={
+    Version.V1: 4 * (1024 ** 2),
+    Version.V2: 4 * (1024 ** 2),
+    Version.V3: 16 * (1024 ** 2),
+}
 
 def get_trainer_kwargs(
     model_size: str,
@@ -117,7 +124,7 @@ def get_trainer_kwargs(
     flash_attention: bool = False,
 ) -> dict[str, Any]:
     """Construct default trainer kwargs given a model size."""
-    tokens_per_batch = 4 * (1024**2)  # 4M tokens.
+    tokens_per_batch = TOKENS_PER_BATCH[version]
     if model_size not in TOTAL_TOKENS[version]:
         return {}
     max_step = TOTAL_TOKENS[version][model_size] // tokens_per_batch
