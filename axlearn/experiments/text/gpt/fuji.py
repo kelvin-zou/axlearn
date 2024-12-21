@@ -142,11 +142,11 @@ def get_trainer_kwargs(
         extended_checkpoint_policies.offload_dots_saveable
     ).set(offload_src="device", offload_dst="pinned_host")
 
-    save_attention_proj_policy = config_for_function(
+    off_attention_proj_policy = config_for_function(
         extended_checkpoint_policies.save_and_offload_only_these_names_regex
     ).set(
-        names_which_can_be_saved=SELF_ATTENTION_SAVE_PATTERN,
-        names_which_can_be_offloaded=None,
+        names_which_can_be_saved=None,
+        names_which_can_be_offloaded=SELF_ATTENTION_SAVE_PATTERN,
         offload_src="device",
         offload_dst="pinned_host",
     )
@@ -439,7 +439,7 @@ def get_trainer_kwargs(
                                 remat_policies={
                                     "model.decoder.transformer.layer": RematSpec(
                                         prevent_cse=True,
-                                        policy=save_attention_proj_policy,
+                                        policy=off_attention_proj_policy,
                                     ),
                                 }
                             ),
