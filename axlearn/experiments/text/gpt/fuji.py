@@ -142,7 +142,7 @@ def get_trainer_kwargs(
         extended_checkpoint_policies.offload_dots_saveable
     ).set(offload_src="device", offload_dst="pinned_host")
 
-    off_attention_proj_policy = config_for_function(
+    offload_attention_proj_policy = config_for_function(
         extended_checkpoint_policies.save_and_offload_only_these_names_regex
     ).set(
         names_which_can_be_saved=None,
@@ -439,10 +439,29 @@ def get_trainer_kwargs(
                                 remat_policies={
                                     "model.decoder.transformer.layer": RematSpec(
                                         prevent_cse=True,
-                                        policy=off_attention_proj_policy,
+                                        policy=offload_attention_proj_policy,
                                     ),
                                 }
                             ),
+                        ],
+                    ),
+                ),
+                (
+                    "tpu-v6e-256",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256)
+                            ),
+                            RematSpecModifier.default_config().set(
+                                remat_policies={
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=True,
+                                        policy=offload_attention_proj_policy,
+                                    ),
+                                }
+                            ),
+                            GradientAccumulationModifier.default_config().set(grad_acc_steps=4),
                         ],
                     ),
                 ),
