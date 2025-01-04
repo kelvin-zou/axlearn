@@ -39,6 +39,7 @@ from axlearn.common.trainer_config_modifier import (
     GradientAccumulationModifier,
     MeshShapeModifier,
     RematSpecModifier,
+    LogicalBatchModifier,
 )
 from axlearn.common.utils import extended_checkpoint_policies
 from axlearn.experiments.text.gpt.common import (
@@ -428,6 +429,7 @@ def get_trainer_kwargs(
                         ],
                     ),
                 ),
+                # tpu-v6e-256x4, step time: 4.9s for v2.
                 (
                     "tpu-v6e-256-(4|8)",
                     ChainConfigModifier.default_config().set(
@@ -462,6 +464,28 @@ def get_trainer_kwargs(
                                 }
                             ),
                             GradientAccumulationModifier.default_config().set(grad_acc_steps=4),
+                        ],
+                    ),
+                ),
+                (
+                    "tpu-v6e-256-16",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(data=-1, fsdp=32, model=8)
+                            ),
+                            RematSpecModifier.default_config().set(
+                                remat_policies={
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=True,
+                                        policy=offload_attention_proj_policy,
+                                    ),
+                                }
+                            ),
+                            LogicalBatchModifier.default_config().set(
+                                logical_batch_size=train_batch_size,
+                                reader_num=1024,
+                            ),
                         ],
                     ),
                 ),

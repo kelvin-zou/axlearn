@@ -15,6 +15,7 @@ from axlearn.common.config import (
     maybe_instantiate,
 )
 from axlearn.common.gradient_accumulation import with_minibatch_steps
+from axlearn.common.input_dispatch import InputDispatcher
 from axlearn.common.metrics import MetricAccumulator
 from axlearn.common.trainer import SpmdTrainer
 from axlearn.common.utils import HybridMeshShape, MeshShape
@@ -178,4 +179,49 @@ class ChainConfigModifier(ConfigModifier):
         """
         for config_modifier_fn in self._config_modifiers:
             cfg = config_modifier_fn(cfg)
+        return cfg
+
+
+class LogicalBatchModifier(ConfigModifier):
+    """Update the mesh_shape for the trainer config."""
+
+    @config_class
+    class Config(ConfigModifier.Config):
+        """Configure MeshShapeModifier.
+
+        Attributes:
+            reader_num: the number of reader hosts.
+            logical_batch_size: the target batch size for logical batch.
+        """
+
+        reader_num: int = REQUIRED
+        logical_batch_size: int=REQUIRED
+
+    def __init__(self, cfg: Config):
+        super().__init__(cfg)
+        cfg = self.config
+        self._reader_num = cfg.reader_num
+        self._logical_batch_size = cfg.logical_batch_size
+
+    def __call__(self, cfg: SpmdTrainer.Config) -> SpmdTrainer.Config:
+        """Overwrite the global batch size and logical batch config.
+
+        Args:
+            cfg: The trainer config to be modified.
+
+        Returns:
+            The modified trainer config.
+        """
+        if self._reader_num <= self._logical_batch_size:
+            logical_feed_indices = [i for i in range(self._reader_num)]
+        else:
+            if self._reader_num % self._logical_batch_size != 0:
+                raise ValueError("reader_num should be divisible by logical_batch_size.")
+            else:
+                logical_feed_indices = [i for i in range(self._reader_num, self._reader_num//self._logical_batch_size)]
+            
+        cfg.input.input_dispatcher = InputDispatcher.default_config().set(
+            global_logical_batch_size = self._logical_batch_size,
+            logical_feed_indices = logical_feed_indices
+        )
         return cfg
