@@ -190,18 +190,21 @@ class LogicalBatchModifier(ConfigModifier):
         """Configure MeshShapeModifier.
 
         Attributes:
-            reader_num: the number of reader hosts.
+            mesh_size: the total number of chips for training.
+            device_per_process: the number of chips per process.
             logical_batch_size: the target batch size for logical batch.
         """
 
-        reader_num: int = REQUIRED
+        mesh_size: int = REQUIRED
+        device_per_process: int = REQUIRED
         logical_batch_size: int=REQUIRED
 
     def __init__(self, cfg: Config):
         super().__init__(cfg)
         cfg = self.config
-        self._reader_num = cfg.reader_num
+        self._process_count = cfg.mesh_size // cfg.device_per_process
         self._logical_batch_size = cfg.logical_batch_size
+        self._mesh_size = cfg.mesh_size
 
     def __call__(self, cfg: SpmdTrainer.Config) -> SpmdTrainer.Config:
         """Overwrite the global batch size and logical batch config.
@@ -212,16 +215,21 @@ class LogicalBatchModifier(ConfigModifier):
         Returns:
             The modified trainer config.
         """
-        if self._reader_num <= self._logical_batch_size:
-            logical_feed_indices = [i for i in range(self._reader_num)]
+        # No logical batch is needed.
+        if self._mesh_size >= self._logical_batch_size:
+            return cfg
+        if self._process_count <= self._logical_batch_size:
+            logical_feed_indices = [i for i in range(self._process_count)]
         else:
-            if self._reader_num % self._logical_batch_size != 0:
-                raise ValueError("reader_num should be divisible by logical_batch_size.")
+            if self._process_count % self._logical_batch_size != 0:
+                raise ValueError("process_count should be divisible by logical_batch_size.")
             else:
-                logical_feed_indices = [i for i in range(self._reader_num, self._reader_num//self._logical_batch_size)]
-            
+                # The logical batch size is larger than the number of chips.
+                logical_feed_indices = [i for i in range(self._process_count, self._process_count//self._logical_batch_size)]
         cfg.input.input_dispatcher = InputDispatcher.default_config().set(
             global_logical_batch_size = self._logical_batch_size,
             logical_feed_indices = logical_feed_indices
         )
+        # Physical batch size per chip is at least 1.
+        cfg.input.batcher.global_batch_size = self._mesh_size
         return cfg

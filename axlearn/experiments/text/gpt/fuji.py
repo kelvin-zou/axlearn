@@ -483,8 +483,9 @@ def get_trainer_kwargs(
                                 }
                             ),
                             LogicalBatchModifier.default_config().set(
+                                mesh_size=4096,
+                                device_per_process=4,
                                 logical_batch_size=train_batch_size,
-                                reader_num=1024,
                             ),
                         ],
                     ),
