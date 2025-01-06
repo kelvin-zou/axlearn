@@ -39,7 +39,6 @@ from axlearn.common.trainer_config_modifier import (
     GradientAccumulationModifier,
     MeshShapeModifier,
     RematSpecModifier,
-    LogicalBatchModifier,
 )
 from axlearn.common.utils import extended_checkpoint_policies
 from axlearn.experiments.text.gpt.common import (
@@ -111,11 +110,12 @@ TOTAL_TOKENS = {
 
 # Llama3 uses 16m tokens after 2.87T tokens.
 # https://arxiv.org/pdf/2407.21783
-TOKENS_PER_BATCH={
-    Version.V1: 4 * (1024 ** 2),
-    Version.V2: 4 * (1024 ** 2),
-    Version.V3: 16 * (1024 ** 2),
+TOKENS_PER_BATCH = {
+    Version.V1: 4 * (1024**2),
+    Version.V2: 4 * (1024**2),
+    Version.V3: 16 * (1024**2),
 }
+
 
 def get_trainer_kwargs(
     model_size: str,
@@ -380,6 +380,24 @@ def get_trainer_kwargs(
                         ],
                     ),
                 ),
+                (
+                    "tpu-v6e-256-(2|4|8)",
+                    ChainConfigModifier.default_config().set(
+                        config_modifiers=[
+                            MeshShapeModifier.default_config().set(
+                                mesh_shape=mesh_shape_from_axes(data=-1, fsdp=256)
+                            ),
+                            RematSpecModifier.default_config().set(
+                                remat_policies={
+                                    "model.decoder.transformer.layer": RematSpec(
+                                        prevent_cse=True,
+                                        policy=offload_attention_proj_policy,
+                                    ),
+                                }
+                            ),
+                        ],
+                    ),
+                ),
                 ("tpu-v5p-.*", mesh_shape_from_axes(data=-1, fsdp=8)),
                 (
                     "gpu-(p5.48xlarge|p4de.24xlarge|a3-highgpu-8g)-(256|512|1024)",
@@ -429,7 +447,7 @@ def get_trainer_kwargs(
                         ],
                     ),
                 ),
-                # tpu-v6e-256x4, step time: 4.9s for v2.
+                # V2 on tpu-v6e-256x4, step time: 4.9s.
                 (
                     "tpu-v6e-256-(4|8)",
                     ChainConfigModifier.default_config().set(
@@ -448,6 +466,7 @@ def get_trainer_kwargs(
                         ],
                     ),
                 ),
+                # V2 on tpu-v6e-256, step time: 19.5s.
                 (
                     "tpu-v6e-256",
                     ChainConfigModifier.default_config().set(
@@ -464,29 +483,6 @@ def get_trainer_kwargs(
                                 }
                             ),
                             GradientAccumulationModifier.default_config().set(grad_acc_steps=4),
-                        ],
-                    ),
-                ),
-                (
-                    "tpu-v6e-256-16",
-                    ChainConfigModifier.default_config().set(
-                        config_modifiers=[
-                            MeshShapeModifier.default_config().set(
-                                mesh_shape=mesh_shape_from_axes(data=-1, fsdp=32, model=8)
-                            ),
-                            RematSpecModifier.default_config().set(
-                                remat_policies={
-                                    "model.decoder.transformer.layer": RematSpec(
-                                        prevent_cse=True,
-                                        policy=offload_attention_proj_policy,
-                                    ),
-                                }
-                            ),
-                            LogicalBatchModifier.default_config().set(
-                                mesh_size=4096,
-                                device_per_process=4,
-                                logical_batch_size=train_batch_size,
-                            ),
                         ],
                     ),
                 ),

@@ -3928,9 +3928,6 @@ class PipelinedTransformerLayer(BaseStackedTransformerLayer):
 
     # TODO(sneha): extend_step
 
-
-# Adapted from jax source code to support regex. Reference:
-# https://github.com/jax-ml/jax/blob/0d36b0b433a93c707f86dac89b0c05d40302775a/jax/_src/ad_checkpoint.py#L120
 # TODO(kelvin-zou): deprecated, keep it here to minimize distruption to the golden configs.
 # Please use axlearn.common.utils.extended_checkpoint_policies instead.
 def _save_and_offload_only_these_names_regex(
