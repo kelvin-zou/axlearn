@@ -216,7 +216,7 @@ class Learner(BaseLearner):
             optimizer=self.optimizer.init(self._get_optimizer_model_params(model_params)),
         )
         if self.config.ema.decay is not None:
-            state["ema"] = self.ema.init(model_params)
+            state["ema"] = self.ema.init(jax.tree.map(lambda p: p.value, model_params))
         return state
 
     def _update_types(self, tree: dict) -> dict:
@@ -306,17 +306,7 @@ class Learner(BaseLearner):
             state_updates, keep=apply_state_updates, mask_value=optax.MaskedNode()
         )
         _apply_updates(updated_model_params, filtered_state_updates)
-        # if cfg.ema.decay is not None:
-        #     _, ema_state = self.ema.update(
-        #         updates={},
-        #         state=self.state["ema"],
-        #         params=jax.tree.map(
-        #             lambda opt_param, value: dataclasses.replace(opt_param, value=value),
-        #             opt_params,
-        #             updated_model_params,
-        #         ),
-        #     )
-        #     self.add_state_update("ema", ema_state)
+
         return updated_model_params
 
     def forward_and_backward(
@@ -329,7 +319,7 @@ class Learner(BaseLearner):
             _, ema_state = self.ema.update(
                 updates={},
                 state=self.state["ema"],
-                params=opt_params,
+                params=jax.tree.map(lambda p: p.value, opt_params),
             )
             self.add_state_update("ema", ema_state)
         updates = _value_and_grad(
@@ -487,7 +477,7 @@ class CompositeLearner(BaseLearner):
             # Sub-learner's state.
             learner_state[name] = sub_learner_state
         if self.config.ema.decay is not None:
-            learner_state["ema"] = self.ema.init(model_params)
+            learner_state["ema"] = self.ema.init(jax.tree.map(lambda p: p.value, model_params))
         return learner_state
 
     def update(self, updates: Updates) -> Nested[Tensor]:
@@ -529,17 +519,7 @@ class CompositeLearner(BaseLearner):
                 sub_learner_updated_model_params,
                 updated_model_params,
             )
-        # if cfg.ema.decay is not None:
-        #     _, ema_state = self.ema.update(
-        #         updates={},
-        #         state=self.state["ema"],
-        #         params=jax.tree.map(
-        #             lambda opt_param, value: dataclasses.replace(opt_param, value=value),
-        #             updates.opt_params,
-        #             updated_model_params,
-        #         ),
-        #     )
-        #     self.add_state_update("ema", ema_state)
+
         return updated_model_params
 
     def forward_and_backward(
@@ -555,7 +535,7 @@ class CompositeLearner(BaseLearner):
             _, ema_state = self.ema.update(
                 updates={},
                 state=self.state["ema"],
-                params=opt_params,
+                params=jax.tree.map(lambda p: p.value, opt_params),
             )
             self.add_state_update("ema", ema_state)
 

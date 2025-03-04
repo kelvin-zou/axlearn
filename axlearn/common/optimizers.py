@@ -1595,7 +1595,6 @@ def param_ema(
         """Update the params in an async manner."""
         if params is None:
             raise ValueError("params are required for param_ema.")
-
         def ema_fn():
             def compute_fn(params):
                 decay_t = decay_fn(state.count)

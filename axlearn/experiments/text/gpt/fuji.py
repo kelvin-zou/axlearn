@@ -305,7 +305,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8),
+            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=4),
             mesh_rules=(
                 (
                     "neuron-(trn2|trn2n).48xlarge-64",
@@ -339,7 +339,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8),
+            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=4),
             mesh_rules=(
                 (
                     "neuron-(trn2|trn2n).48xlarge-64",
@@ -372,7 +372,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8),
+            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=4),
             mesh_rules=(
                 # Step time:
                 # v1 on tpu-v4-1024 (512 chips):            3.03s
@@ -879,11 +879,11 @@ def trainer_configs(
                 # The original config was supposed to run on >= 32 machines.
                 # pylint: disable=cell-var-from-loop
                 cfg.input.input_dispatcher.global_logical_batch_size //= (
-                    128 if version in (Version.V3, Version.V3_TIKTOKEN) else 32
+                    512 if version in (Version.V3, Version.V3_TIKTOKEN) else 256
                 )
                 for evaler in cfg.evalers.values():
                     evaler.input.input_dispatcher.global_logical_batch_size //= (
-                        128 if version in (Version.V3, Version.V3_TIKTOKEN) else 32
+                        512 if version in (Version.V3, Version.V3_TIKTOKEN) else 256
                     )
                 # pylint: enable=cell-var-from-loop
                 return cfg
