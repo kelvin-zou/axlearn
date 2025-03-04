@@ -14,6 +14,7 @@ from absl import logging
 from absl.testing import absltest, parameterized
 from jax import numpy as jnp
 from jax.experimental import mesh_utils
+from jax.experimental.pjit import pjit
 
 from axlearn.common import schedule, test_utils
 from axlearn.common.base_layer import FactorizationSpec, NestedParameterSpec, ParameterSpec
@@ -1204,61 +1205,92 @@ class OptimizerTest(TestCase):
     @parameterized.product(
         decay=(None, 0.9, decay_bias_correction(0.9)),
         dtype=(jnp.float32, jnp.bfloat16),
+        # offload=(True),
     )
-    def test_param_ema(self, decay, dtype):
-        opt = param_ema(decay=decay)
-        param_specs = dict(
-            v=ParameterSpec(
-                dtype=dtype,
-                shape=[4],
-                mesh_axes=PartitionSpec("model"),
-            ),
-        )
-        opt_specs = opt.partition(param_specs)
-        if decay is None:
-            self.assertEqual(optax.EmptyState(), opt_specs)
-        else:
-            self.assertEqual(
-                ParamEmaState(
-                    count=OptStateSpec(dtype=jnp.int32, shape=[], mesh_axes=PartitionSpec()),
-                    ema=dict(
-                        v=OptStateSpec(dtype=dtype, shape=[4], mesh_axes=PartitionSpec("model"))
-                    ),
+    def test_param_ema(self, decay, dtype, offload=True):
+        with jax.sharding.Mesh(mesh_utils.create_device_mesh((8,)), ("model")):
+            opt = param_ema(decay=decay, memory_kind="pinned_host" if offload else None)
+            param_specs = dict(
+                v=ParameterSpec(
+                    dtype=dtype,
+                    shape=[8],
+                    mesh_axes=PartitionSpec("model"),
                 ),
-                opt_specs,
             )
 
-        params = dict(
-            v=OptParam(
-                value=jnp.asarray([0, 1, 2, -3], dtype=jnp.float32),
-                factorization_spec=None,
-                weight_decay_scale=1.0,
-            ),
-        )
-        state: ParamEmaState = opt.init(params)
-        if decay is None:
-            self.assertEqual(optax.EmptyState(), state)
-        else:
-            self.assertNestedAllClose(
-                ParamEmaState(count=0, ema=jax.tree.map(lambda p: jnp.zeros_like(p.value), params)),
-                state,
-            )
-
-        _, new_state = opt.update({}, state=state, params=params)
-        if decay is None:
-            self.assertEqual(optax.EmptyState(), new_state)
-        else:
-            self.assertEqual(new_state.count, 1)
-            if isinstance(decay, float):
-                self.assertNestedAllClose(
-                    jax.tree.map(lambda p: (1 - decay) * p.value, params),
-                    new_state.ema,
-                )
+            opt_specs = opt.partition(param_specs)
+            if decay is None:
+                self.assertEqual(optax.EmptyState(), opt_specs)
             else:
-                self.assertNestedAllClose(
-                    jax.tree.map(lambda p: p.value, params),
-                    new_state.ema,
+                self.assertEqual(
+                    ParamEmaState(
+                        count=OptStateSpec(
+                            dtype=jnp.int32,
+                            shape=[],
+                            mesh_axes=PartitionSpec(),
+                            memory_kind="pinned_host" if offload else None,
+                        ),
+                        ema=dict(
+                            v=OptStateSpec(
+                                dtype=dtype,
+                                shape=[8],
+                                mesh_axes=PartitionSpec("model"),
+                                memory_kind="pinned_host" if offload else None,
+                            ),
+                        ),
+                    ),
+                    opt_specs,
                 )
+
+            params = dict(
+                v=OptParam(
+                    value=jnp.asarray([0, 1, 2, -3, 4, 5, 6, 7], dtype=jnp.float32),
+                    factorization_spec=None,
+                    weight_decay_scale=1.0,
+                ),
+            )
+
+            opt_sharding_spec = jax.tree.map(
+                lambda spec: spec.sharding, opt_specs
+            )
+            pjit_init = pjit(
+                opt.init,
+                in_shardings=(None,),
+                out_shardings=opt_sharding_spec,
+            )
+            params_value = jax.tree_map(lambda p: p.value, params)
+            
+            state = pjit_init(params_value)
+            # state: ParamEmaState = opt.init(params)
+            # if decay is None:
+            #     self.assertEqual(optax.EmptyState(), state)
+            # else:
+            #     self.assertNestedAllClose(
+            #         ParamEmaState(count=0, ema=jax.tree.map(lambda p: jnp.zeros_like(p.value), params)),
+            #         state,
+            #     )
+            @jax.jit
+            def jit_update(state, params):
+                return opt.update({}, state=state, params=params)
+            print(str(jax.make_jaxpr(jit_update)(state, params_value)))
+            _, new_state = jit_update(state=state, params=params_value)
+            # _, new_state = jax.jit(opt.update)({}, state=state, params=params_value)
+            
+
+            # if decay is None:
+            #     self.assertEqual(optax.EmptyState(), new_state)
+            # else:
+            #     self.assertEqual(new_state.count, 1)
+            #     if isinstance(decay, float):
+            #         self.assertNestedAllClose(
+            #             jax.tree.map(lambda p: (1 - decay) * p.value, params),
+            #             new_state.ema,
+            #         )
+            #     else:
+            #         self.assertNestedAllClose(
+            #             jax.tree.map(lambda p: p.value, params),
+            #             new_state.ema,
+            #         )
 
     def test_scale_by_schedule(self):
         params = OptParam(

@@ -327,13 +327,16 @@ class LearnerTest(TestCase):
             ),
         }
         if ema_decay:
+            # Due to the delayed update, we expect the initial weight.
             expected_state_update["ema"] = ParamEmaState(
                 count=1,
-                ema=jax.tree.map(lambda v: v * (1 - ema_decay), updated_params),
+                ema=jax.tree.map(lambda v: v.value * (1 - ema_decay), params),
             )
+        print(f"state_updates: {state_updates}")
+        print(f"expected_state_update: {expected_state_update}")
         self.assertNestedAllClose(
-            expected_state_update,
             state_updates,
+            expected_state_update,
         )
 
     @parameterized.named_parameters(
@@ -1244,7 +1247,7 @@ class CompositeLearnerTest(TestCase):
             "encoder": expected_encoder_updates,
             "decoder": expected_decoder_updates,
         }
-        if ema_decay is not None:
+        if ema_decay is not None and method=="forward_and_backward":
             expected_ema = ParamEmaState(
                 count=encoder_collection.state_updates["ema"].count,
                 ema=dict(

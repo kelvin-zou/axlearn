@@ -306,23 +306,32 @@ class Learner(BaseLearner):
             state_updates, keep=apply_state_updates, mask_value=optax.MaskedNode()
         )
         _apply_updates(updated_model_params, filtered_state_updates)
-        if cfg.ema.decay is not None:
-            _, ema_state = self.ema.update(
-                updates={},
-                state=self.state["ema"],
-                params=jax.tree.map(
-                    lambda opt_param, value: dataclasses.replace(opt_param, value=value),
-                    opt_params,
-                    updated_model_params,
-                ),
-            )
-            self.add_state_update("ema", ema_state)
+        # if cfg.ema.decay is not None:
+        #     _, ema_state = self.ema.update(
+        #         updates={},
+        #         state=self.state["ema"],
+        #         params=jax.tree.map(
+        #             lambda opt_param, value: dataclasses.replace(opt_param, value=value),
+        #             opt_params,
+        #             updated_model_params,
+        #         ),
+        #     )
+        #     self.add_state_update("ema", ema_state)
         return updated_model_params
 
     def forward_and_backward(
         self, *, fn: ForwardFn, inputs: Nested[Tensor], opt_params: Nested[OptParam]
     ) -> ForwardBackwardOutputs:
+        cfg = self.config
         should_compute_gradients = self.should_update_with_optimizers(opt_params)
+        # Trigger an async update of the ema state.
+        if cfg.ema.decay is not None:
+            _, ema_state = self.ema.update(
+                updates={},
+                state=self.state["ema"],
+                params=opt_params,
+            )
+            self.add_state_update("ema", ema_state)
         updates = _value_and_grad(
             self._forward_fn_transformation(fn),
             opt_params=opt_params,
@@ -520,26 +529,36 @@ class CompositeLearner(BaseLearner):
                 sub_learner_updated_model_params,
                 updated_model_params,
             )
-        if cfg.ema.decay is not None:
-            _, ema_state = self.ema.update(
-                updates={},
-                state=self.state["ema"],
-                params=jax.tree.map(
-                    lambda opt_param, value: dataclasses.replace(opt_param, value=value),
-                    updates.opt_params,
-                    updated_model_params,
-                ),
-            )
-            self.add_state_update("ema", ema_state)
+        # if cfg.ema.decay is not None:
+        #     _, ema_state = self.ema.update(
+        #         updates={},
+        #         state=self.state["ema"],
+        #         params=jax.tree.map(
+        #             lambda opt_param, value: dataclasses.replace(opt_param, value=value),
+        #             updates.opt_params,
+        #             updated_model_params,
+        #         ),
+        #     )
+        #     self.add_state_update("ema", ema_state)
         return updated_model_params
 
     def forward_and_backward(
         self, *, fn: ForwardFn, inputs: Nested[Tensor], opt_params: Nested[OptParam]
     ) -> ForwardBackwardOutputs:
+        cfg = self.config
         with child_context(
             "should_compute_gradients", module=self, output_collection=new_output_collection()
         ):
             should_compute_gradients = self.should_update_with_optimizers(opt_params)
+        # Trigger an async update of the ema state.
+        if cfg.ema.decay is not None:
+            _, ema_state = self.ema.update(
+                updates={},
+                state=self.state["ema"],
+                params=opt_params,
+            )
+            self.add_state_update("ema", ema_state)
+
         updates = _value_and_grad(
             fn,
             opt_params=opt_params,

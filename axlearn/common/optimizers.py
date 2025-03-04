@@ -33,6 +33,8 @@ from typing import Any, Callable, NamedTuple, Optional, Union
 
 import chex
 import jax
+import jax.experimental
+import jax.experimental.compute_on
 import optax
 import typing_extensions
 from absl import logging
@@ -1557,6 +1559,7 @@ class ParamEmaState(NamedTuple):
 def param_ema(
     *,
     decay: Optional[schedule.Schedule] = None,
+    memory_kind: Optional[MemoryKind] = None,
 ) -> PartitionedGradientTransformation:
     """Computes the EMA of model params.
 
@@ -1577,34 +1580,64 @@ def param_ema(
         return _no_op()
 
     decay_fn = schedule.as_schedule_fn(decay)
+    compute_device = "device_host" if memory_kind is not None and memory_kind == "pinned_host" else "device"
 
     def init_fn(params):
         return ParamEmaState(
             count=jnp.zeros([], jnp.int32),
-            ema=jax.tree.map(lambda p: jnp.zeros_like(p.value), params),
+            # ema=jax.tree.map(lambda p: jnp.zeros_like(p.value), params),
+            ema=jax.tree.map(lambda p: jnp.zeros_like(p), params),
         )
 
     def update_fn(updates, state, params):
+        """Update the params in an async manner."""
         if params is None:
             raise ValueError("params are required for param_ema.")
+        if compute_device == "device_host":
+            params = jax.tree.map(
+                lambda param: jax.device_put(
+                    param, TransferToMemoryKind(memory_kind=memory_kind)
+                ),
+                params,
+            )
+        @jax.experimental.compute_on.compute_on(compute_device)
+        def ema_fn(params):
+            decay_t = decay_fn(state.count)
+            # Transform updates and compute new per-tensor EMA.
+            max_int32_value = jnp.iinfo(jnp.int32).max
+            one = jnp.array(1, dtype=jnp.int32)
+            one = jax.device_put(one, TransferToMemoryKind(memory_kind=memory_kind)
+                    )  if compute_device=="device_host" else one
+            count_inc = jnp.where(state.count < max_int32_value, state.count + one, max_int32_value)
 
-        decay_t = decay_fn(state.count)
+            new_ema = jax.tree.map(
+                lambda param, ema: (1 - decay_t) * param + decay_t * ema,
+                params,
+                state.ema,
+            )
 
-        # Transform updates and compute new per-tensor EMA.
-        count_inc = optax.safe_int32_increment(state.count)
-        new_ema = jax.tree.map(
-            lambda param, ema: (1 - decay_t) * param.value + decay_t * ema,
-            params,
-            state.ema,
+            return count_inc, new_ema # ParamEmaState(count=count_inc, ema=new_ema)
+        
+        count_inc, new_ema = ema_fn(params)
+        # Make it explicit in host memory.
+        new_ema = jax.tree_map(lambda x: jax.device_put(
+                x, TransferToMemoryKind(memory_kind=memory_kind)
+            ), new_ema)
+        count_inc = jax.device_put(
+            count_inc, TransferToMemoryKind(memory_kind=memory_kind)
         )
-        return updates, ParamEmaState(count=count_inc, ema=new_ema)
+        new_ema_state = ParamEmaState(count=count_inc, ema=new_ema) # ema_fn(params)
+        return updates, new_ema_state
 
     def partition_fn(
         param_specs: Nested[ParameterSpec],
     ) -> Nested[Union[OptStateSpec, ParamEmaState]]:
+        # TODO(kelvinzou): revisit this, `count` may be stored on device.
         return ParamEmaState(
-            count=OptStateSpec(dtype=jnp.int32, shape=[], mesh_axes=PartitionSpec()),
-            ema=copy_partition(param_specs),
+            count=OptStateSpec(
+                dtype=jnp.int32, shape=[], mesh_axes=PartitionSpec(), memory_kind=memory_kind
+            ),
+            ema=copy_partition(param_specs, pattern=".*", memory_kind=memory_kind),
         )
 
     return PartitionedGradientTransformation(init=init_fn, update=update_fn, partition=partition_fn)
