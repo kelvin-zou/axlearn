@@ -1218,7 +1218,7 @@ class OptimizerTest(TestCase):
                     dtype=dtype,
                     shape=[8],
                     mesh_axes=PartitionSpec("model"),
-                ),
+                )
             )
 
             opt_specs = opt.partition(param_specs)
@@ -1239,68 +1239,80 @@ class OptimizerTest(TestCase):
                                 shape=[8],
                                 mesh_axes=PartitionSpec("model"),
                                 memory_kind="pinned_host" if offload else None,
-                            ),
+                            )
                         ),
                     ),
                     opt_specs,
                 )
 
-            params = dict(
-                v=OptParam(
-                    value=jnp.asarray([0, 1, 2, -3, 4, 5, 6, 7], dtype=jnp.float32),
-                    factorization_spec=None,
-                    weight_decay_scale=1.0,
-                ),
-            )
+            params = dict(v=jnp.asarray([0, 1, 2, -3, 4, 5, 6, 7], dtype=jnp.float32))
 
-            opt_sharding_spec = jax.tree.map(
-                lambda spec: spec.sharding, opt_specs
-            )
+            opt_sharding_spec = jax.tree.map(lambda spec: spec.sharding, opt_specs)
             pjit_init = pjit(
                 opt.init,
                 in_shardings=(None,),
                 out_shardings=opt_sharding_spec,
             )
-            params_value = jax.tree_map(lambda p: p.value, params)
-            
-            state = pjit_init(params_value)
+
+            state = pjit_init(params)
+            logging.info("pjit_init=%s", pjit_init.trace(params).lower().compile().as_text())
+
+            # We move back ema state to device for the check,
+            # for check the final result since they must be in the same memory kind.
             @jax.jit
-            def move_state_fn(state):
-                new_state = jax.tree_map(lambda x: jax.device_put(
-                    x, TransferToMemoryKind(memory_kind="device")
-                ), state)
+            def load_state_fn(state):
+                new_state = jax.tree_map(
+                    lambda x: jax.device_put(x, TransferToMemoryKind(memory_kind="device")), state
+                )
                 return new_state
+
             if decay is None:
                 self.assertEqual(optax.EmptyState(), state)
             else:
                 if offload:
-                    state = move_state_fn(state)
+                    ondevice_state = load_state_fn(state)
+                else:
+                    ondevice_state = state
                 self.assertNestedAllClose(
-                    ParamEmaState(count=0, ema=jax.tree.map(lambda p: jnp.zeros_like(p.value), params)),
-                    state,
+                    ParamEmaState(count=0, ema=params),
+                    ondevice_state,
                 )
+
+            new_params = dict(v=jnp.asarray([2, -3, 4, 5, 6, 7, 0, 1], dtype=jnp.float32))
+
             @jax.jit
             def jit_update(state, params):
                 return opt.update({}, state=state, params=params)
-            # print(str(jax.make_jaxpr(jit_update)(state, params_value)))
-            print(jit_update.trace(state, params_value).lower().compile().as_text())
-            _, new_state = jit_update(state=state, params=params_value)
+
+            logging.info(
+                "jit_update before optimize=%s",
+                str(jax.make_jaxpr(jit_update)(state, new_params)),
+            )
+            logging.info(
+                "jit_update after optimize=%s",
+                jit_update.trace(state, new_params).lower().compile().as_text(),
+            )
+            _, new_state = jit_update(state=state, params=new_params)
 
             if decay is None:
                 self.assertEqual(optax.EmptyState(), new_state)
             else:
                 if offload:
-                    new_state = move_state_fn(new_state)
-                self.assertEqual(new_state.count, 1)
+                    ondevice_new_state = load_state_fn(new_state)
+                else:
+                    ondevice_new_state = new_state
+                self.assertEqual(ondevice_new_state.count, 1)
                 if isinstance(decay, float):
                     self.assertNestedAllClose(
-                        jax.tree.map(lambda p: (1 - decay) * p.value, params),
-                        new_state.ema,
+                        jax.tree.map(
+                            lambda p0, p1: decay * p0 + (1 - decay) * p1, params, new_params
+                        ),
+                        ondevice_new_state.ema,
                     )
                 else:
                     self.assertNestedAllClose(
-                        jax.tree.map(lambda p: p.value, params),
-                        new_state.ema,
+                        jax.tree.map(lambda p: p, new_params),
+                        ondevice_new_state.ema,
                     )
 
     def test_scale_by_schedule(self):
