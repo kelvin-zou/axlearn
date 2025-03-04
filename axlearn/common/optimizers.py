@@ -1600,14 +1600,12 @@ def param_ema(
                 ),
                 params,
             )
-        @jax.experimental.compute_on.compute_on(compute_device)
+
         def ema_fn(params):
             decay_t = decay_fn(state.count)
             # Transform updates and compute new per-tensor EMA.
             max_int32_value = jnp.iinfo(jnp.int32).max
             one = jnp.array(1, dtype=jnp.int32)
-            one = jax.device_put(one, TransferToMemoryKind(memory_kind=memory_kind)
-                    )  if compute_device=="device_host" else one
             count_inc = jnp.where(state.count < max_int32_value, state.count + one, max_int32_value)
 
             new_ema = jax.tree.map(
@@ -1617,16 +1615,21 @@ def param_ema(
             )
 
             return count_inc, new_ema # ParamEmaState(count=count_inc, ema=new_ema)
-        
+
+        # We cannot call compute_on("device") in a device context, so we need to wrap the ema_fn
+        # only with compute_on("device_host") and return original fn otherwise.
+        ema_fn = jax.experimental.compute_on.compute_on(compute_device)(ema_fn) if compute_device == "device_host" else ema_fn
+
         count_inc, new_ema = ema_fn(params)
         # Make it explicit in host memory.
-        new_ema = jax.tree_map(lambda x: jax.device_put(
-                x, TransferToMemoryKind(memory_kind=memory_kind)
-            ), new_ema)
-        count_inc = jax.device_put(
-            count_inc, TransferToMemoryKind(memory_kind=memory_kind)
-        )
-        new_ema_state = ParamEmaState(count=count_inc, ema=new_ema) # ema_fn(params)
+        if compute_device == "device_host":
+            new_ema = jax.tree_map(lambda x: jax.device_put(
+                    x, TransferToMemoryKind(memory_kind=memory_kind)
+                ), new_ema)
+            count_inc = jax.device_put(
+                count_inc, TransferToMemoryKind(memory_kind=memory_kind)
+            )
+        new_ema_state = ParamEmaState(count=count_inc, ema=new_ema)
         return updates, new_ema_state
 
     def partition_fn(
