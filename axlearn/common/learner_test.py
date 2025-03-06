@@ -326,11 +326,11 @@ class LearnerTest(TestCase):
                 ),
             ),
         }
-        if ema_decay:
+        if ema_decay and method == "forward_and_backward":
             # Due to the delayed update, we expect the initial weight.
             expected_state_update["ema"] = ParamEmaState(
                 count=1,
-                ema=jax.tree.map(lambda v: v.value * (1 - ema_decay), params),
+                ema=jax.tree.map(lambda v: v.value, params),
             )
         print(f"state_updates: {state_updates}")
         print(f"expected_state_update: {expected_state_update}")
@@ -1247,7 +1247,8 @@ class CompositeLearnerTest(TestCase):
             "encoder": expected_encoder_updates,
             "decoder": expected_decoder_updates,
         }
-        if ema_decay is not None and method=="forward_and_backward":
+        if ema_decay is not None and method == "forward_and_backward":
+            # Due to the delayed update, we expect the initial weight.
             expected_ema = ParamEmaState(
                 count=encoder_collection.state_updates["ema"].count,
                 ema=dict(
@@ -1261,6 +1262,10 @@ class CompositeLearnerTest(TestCase):
             expected_state_updates,
             output_collection.state_updates,
         )
+        if method == "update":
+            # Update fn doesn't generate ema state, which was generated at caller
+            # level in forward_and_backward.
+            state.pop("ema", None)
         # Test state_updates match with init state tree structure.
         self.assertEqual(
             {key for key, _ in flatten_items(output_collection.state_updates)},
