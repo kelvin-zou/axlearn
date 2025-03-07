@@ -1206,12 +1206,17 @@ class OptimizerTest(TestCase):
     @parameterized.product(
         decay=(None, 0.9, decay_bias_correction(0.9)),
         dtype=(jnp.float32, jnp.bfloat16),
-        memory_and_device_kind=(("pinned_host", "device_host"), ("pinned_host", "device"), ("device", "device"), (None, None), (None, "device")),
+        memory_and_device_kind=(("pinned_host", "device_host"), ("pinned_host", "device"), ("device", "device"), (None, None), (None, "device"), ("device", "device_host")),
         mesh_shape=((4,),),
         mesh_axes=("model",),
     )
     def test_param_ema(self, decay, dtype, memory_and_device_kind, mesh_shape, mesh_axes):
         with jax.sharding.Mesh(mesh_utils.create_device_mesh(mesh_shape), mesh_axes):
+            if memory_and_device_kind == ("device", "device_host") and decay is not None:
+                with self.assertRaisesRegex(ValueError, "compute_device cannot be"):
+                    param_ema(decay=decay, memory_kind=memory_and_device_kind[0], compute_device=memory_and_device_kind[1])
+                return
+            
             opt = param_ema(decay=decay, memory_kind=memory_and_device_kind[0], compute_device=memory_and_device_kind[1])
             param_specs = dict(
                 v=ParameterSpec(

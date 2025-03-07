@@ -1625,7 +1625,12 @@ def param_ema(
     decay_fn = schedule.as_schedule_fn(decay)
 
     def init_fn(params):
-        """Assign the original weight."""
+        """Assign the original weight.
+        
+        There are two ways, one is to initialize with zero, and the alternative 
+        is to assign with the original weight. We choose the latter since it works
+        better with continuous pretrain load and train.
+        """
         return ParamEmaState(
             count=jnp.zeros([], jnp.int32),
             ema=params,
