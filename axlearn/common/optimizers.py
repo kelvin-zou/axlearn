@@ -30,6 +30,7 @@ import dataclasses
 import re
 from collections.abc import Sequence
 from typing import Any, Callable, NamedTuple, Optional, Union
+from functools import partial
 
 import chex
 import jax
@@ -55,6 +56,7 @@ from axlearn.common.optimizer_base import (
     TransformPartitionSpecFn,
 )
 from axlearn.common.utils import (
+    ComputeDeviceKind,
     MemoryKind,
     Nested,
     NestedTensor,
@@ -1560,10 +1562,18 @@ def param_ema(
     *,
     decay: Optional[schedule.Schedule] = None,
     memory_kind: Optional[MemoryKind] = None,
+    compute_device: Optional[ComputeDeviceKind] = None,
 ) -> PartitionedGradientTransformation:
     """Computes the EMA of model params.
 
     Also known as "polyak averaging".
+
+    We can support 3 combinations of ema state storage and computation:
+    1. ema state stored on device, compute ema on device.
+    2. ema state stored on pinned_host, compute ema on device.
+    3. ema state stored on pinned_host, compute ema on device_host.
+    There is zero benefit for storing ema state on device while compute on device_host,
+    so we do not support that.
 
     References:
         [Polyak et al, 1991](https://epubs.siam.org/doi/10.1137/0330046)
@@ -1573,16 +1583,46 @@ def param_ema(
         decay: The EMA decay rate. If None, EMA is disabled.
             To enable bias correction, wrap the decay with schedule.decay_bias_correction().
 
+        memory_kind: Optional memory kind for the EMA state. If None, defaults to the same memory
+            kind as the params.
+
+        compute_device: Optional compute device for the EMA state. If None, defaults to the same
+            compute device as the params.
+
     Returns:
         A PartitionedGradientTransformation.
     """
     if decay is None:
         return _no_op()
 
+    if (memory_kind is None or memory_kind == "device") and (
+        compute_device and compute_device == "device_host"
+    ):
+        raise ValueError(
+            "If memory_kind is None or 'device', compute_device cannot be 'device_host'."
+        )
+
+    def _maybe_move_to_device(state, memory_kind, compute_device):
+        """Move the EMA state to the device if necessary."""
+        if (
+            memory_kind
+            and memory_kind == "pinned_host"
+            and (compute_device is None or compute_device == "device")
+        ):
+            return jax.device_put(state, TransferToMemoryKind("device"))
+        return state
+
+    def _maybe_move_to_host(state, memory_kind, compute_device):
+        """Move the EMA state to the host if necessary."""
+        if (
+            memory_kind
+            and memory_kind == "pinned_host"
+            and (compute_device is None or compute_device == "device")
+        ):
+            return jax.device_put(state, TransferToMemoryKind("pinned_host"))
+        return state
+
     decay_fn = schedule.as_schedule_fn(decay)
-    compute_device = (
-        "device_host" if memory_kind is not None and memory_kind == "pinned_host" else "device"
-    )
 
     def init_fn(params):
         """Assign the original weight."""
@@ -1595,8 +1635,14 @@ def param_ema(
         """Update the params in an async manner."""
         if params is None:
             raise ValueError("params are required for param_ema.")
+
+        # If the memory_kind is "pinned_host" and compute_device is "device",
+        # we need to transfer the params to the device before updating the EMA.
+        state = _maybe_move_to_device(state, memory_kind, compute_device)
+
         def ema_fn():
-            def compute_fn(params):
+            @partial(jax.jit, donate_argnames=["state"])
+            def compute_fn(params, state):
                 decay_t = decay_fn(state.count)
                 # Transform updates and compute new per-tensor EMA.
                 max_int32_value = jnp.iinfo(jnp.int32).max
@@ -1611,30 +1657,28 @@ def param_ema(
                     state.ema,
                 )
 
-                return count_inc, new_ema
+                return ParamEmaState(count=count_inc, ema=new_ema)
 
             # We cannot call compute_on("device") in a device context,
             # so we need to wrap the ema_fn only with compute_on("device_host")
             # and return original fn otherwise.
-            if compute_device == "device_host":
+            if compute_device and compute_device == "device_host":
 
                 @jax.experimental.compute_on.compute_on(compute_device)
-                def offloaded_compute(params):
-                    return compute_fn(params)
+                def offloaded_compute(params, state):
+                    return compute_fn(params, state)
 
                 return offloaded_compute
             else:
                 return compute_fn
 
-        count_inc, new_ema = ema_fn()(params)
-
-        new_ema_state = ParamEmaState(count=count_inc, ema=new_ema)
+        new_ema_state = ema_fn()(params, state)
+        new_ema_state = _maybe_move_to_host(new_ema_state, memory_kind, compute_device)
         return updates, new_ema_state
 
     def partition_fn(
         param_specs: Nested[ParameterSpec],
     ) -> Nested[Union[OptStateSpec, ParamEmaState]]:
-        # TODO(kelvinzou): revisit this, `count` may be stored on device.
         return ParamEmaState(
             count=OptStateSpec(
                 dtype=jnp.int32, shape=[], mesh_axes=PartitionSpec(), memory_kind=memory_kind

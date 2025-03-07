@@ -1206,13 +1206,13 @@ class OptimizerTest(TestCase):
     @parameterized.product(
         decay=(None, 0.9, decay_bias_correction(0.9)),
         dtype=(jnp.float32, jnp.bfloat16),
-        offload=(False, True),
+        memory_and_device_kind=(("pinned_host", "device_host"), ("pinned_host", "device"), ("device", "device"), (None, None), (None, "device")),
         mesh_shape=((4,),),
         mesh_axes=("model",),
     )
-    def test_param_ema(self, decay, dtype, offload, mesh_shape, mesh_axes):
+    def test_param_ema(self, decay, dtype, memory_and_device_kind, mesh_shape, mesh_axes):
         with jax.sharding.Mesh(mesh_utils.create_device_mesh(mesh_shape), mesh_axes):
-            opt = param_ema(decay=decay, memory_kind="pinned_host" if offload else None)
+            opt = param_ema(decay=decay, memory_kind=memory_and_device_kind[0], compute_device=memory_and_device_kind[1])
             param_specs = dict(
                 v=ParameterSpec(
                     dtype=dtype,
@@ -1231,14 +1231,14 @@ class OptimizerTest(TestCase):
                             dtype=jnp.int32,
                             shape=[],
                             mesh_axes=PartitionSpec(),
-                            memory_kind="pinned_host" if offload else None,
+                            memory_kind=memory_and_device_kind[0],
                         ),
                         ema=dict(
                             v=OptStateSpec(
                                 dtype=dtype,
                                 shape=[8],
                                 mesh_axes=PartitionSpec("model"),
-                                memory_kind="pinned_host" if offload else None,
+                                memory_kind=memory_and_device_kind[0],
                             )
                         ),
                     ),
@@ -1261,15 +1261,14 @@ class OptimizerTest(TestCase):
             # for check the final result since they must be in the same memory kind.
             @jax.jit
             def load_state_fn(state):
-                new_state = jax.tree_map(
+                return jax.tree_map(
                     lambda x: jax.device_put(x, TransferToMemoryKind(memory_kind="device")), state
                 )
-                return new_state
 
             if decay is None:
                 self.assertEqual(optax.EmptyState(), state)
             else:
-                if offload:
+                if memory_and_device_kind[0]=="pinned_host":
                     ondevice_state = load_state_fn(state)
                 else:
                     ondevice_state = state
@@ -1297,7 +1296,7 @@ class OptimizerTest(TestCase):
             if decay is None:
                 self.assertEqual(optax.EmptyState(), new_state)
             else:
-                if offload:
+                if memory_and_device_kind[0]=="pinned_host":
                     ondevice_new_state = load_state_fn(new_state)
                 else:
                     ondevice_new_state = new_state
