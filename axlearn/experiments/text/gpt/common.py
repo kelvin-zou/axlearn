@@ -692,8 +692,8 @@ def get_trainer_config_fn(
                 }
             ),
         )
-        cfg.learner.ema.memory_kind="pinned_host"
-        cfg.learner.ema.compute_device="device"
+        cfg.learner.ema.memory_kind = "pinned_host"
+        cfg.learner.ema.compute_device = "device"
         cfg.learner.ema.decay = 0.9
         cfg.evalers = {}
         for name, evaler_cfg in evalers.items():

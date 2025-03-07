@@ -29,8 +29,8 @@ Despite this, there are no plans to stop supporting `PartitionedGradientTransfor
 import dataclasses
 import re
 from collections.abc import Sequence
-from typing import Any, Callable, NamedTuple, Optional, Union
 from functools import partial
+from typing import Any, Callable, NamedTuple, Optional, Union
 
 import chex
 import jax
@@ -1626,8 +1626,8 @@ def param_ema(
 
     def init_fn(params):
         """Assign the original weight.
-        
-        There are two ways, one is to initialize with zero, and the alternative 
+
+        There are two ways, one is to initialize with zero, and the alternative
         is to assign with the original weight. We choose the latter since it works
         better with continuous pretrain load and train.
         """

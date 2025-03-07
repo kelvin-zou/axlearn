@@ -96,7 +96,8 @@ class HybridMeshShape:
 # direct memory access (DMA). For TPU, "pinned_host" memory layout follows TPU device tile
 # layout and usually cannot be zero-copy converted to a CPU-tensor.
 MemoryKind = Literal["device", "pinned_host"]
-ComputeDeviceKind=Literal["device","device_host"]
+ComputeDeviceKind = Literal["device", "device_host"]
+
 
 @dataclasses.dataclass
 class TensorSpec:
