@@ -1646,7 +1646,7 @@ def param_ema(
         state = _maybe_move_to_device(state, memory_kind, compute_device)
 
         def ema_fn():
-            @partial(jax.jit, donate_argnames=["state"])
+            @jax.jit
             def compute_fn(params, state):
                 decay_t = decay_fn(state.count)
                 # Transform updates and compute new per-tensor EMA.
