@@ -1633,7 +1633,7 @@ def param_ema(
         """
         return ParamEmaState(
             count=jnp.zeros([], jnp.int32),
-            ema=params,
+            ema=jax.tree.map(lambda x: jnp.zeros_like(x), params),
         )
 
     def update_fn(updates, state, params):

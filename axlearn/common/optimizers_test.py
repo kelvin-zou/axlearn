@@ -1276,7 +1276,6 @@ class OptimizerTest(TestCase):
 
             state = pjit_init(params)
             logging.info("pjit_init=%s", pjit_init.trace(params).lower().compile().as_text())
-
             # We move back ema state to device for the check,
             # for check the final result since they must be in the same memory kind.
             @jax.jit
@@ -1293,7 +1292,7 @@ class OptimizerTest(TestCase):
                 else:
                     ondevice_state = state
                 self.assertNestedAllClose(
-                    ParamEmaState(count=0, ema=params),
+                    ParamEmaState(count=0, ema=jax.tree.map(lambda x: jnp.zeros_like(x), params)),
                     ondevice_state,
                 )
 
@@ -1324,7 +1323,7 @@ class OptimizerTest(TestCase):
                 if isinstance(decay, float):
                     self.assertNestedAllClose(
                         jax.tree.map(
-                            lambda p0, p1: decay * p0 + (1 - decay) * p1, params, new_params
+                            lambda p1: (1 - decay) * p1, new_params
                         ),
                         ondevice_new_state.ema,
                     )
